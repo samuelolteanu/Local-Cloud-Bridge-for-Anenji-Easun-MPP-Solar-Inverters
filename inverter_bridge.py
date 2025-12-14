@@ -8,12 +8,14 @@ import json
 INVERTER_PORT = 18899
 LOCAL_CONTROL_PORT = 9999
 BIND_IP = '0.0.0.0'
-POLL_INTERVAL = 0.5 # Fast updates
+POLL_INTERVAL = 0.5
 
 # --- SHARED STATE ---
 current_inverter_conn = None
+modbus_lock = threading.Lock()
 latest_data_json = {
-    "grid_charge_setting": 3, 
+    "grid_charge_setting": 3,
+    "output_mode": 0, # <--- NEW: Defaults to UTI
     "batt_volt": 0,
     "ac_load_watt": 0,
     "batt_power_watt": 0
@@ -43,7 +45,7 @@ def read_modbus_response(conn):
     try:
         raw = conn.recv(1024)
         if not raw or len(raw) < 5: return None
-        if raw[1] != 3: return None 
+        if raw[1] > 4: return None 
         byte_count = raw[2]
         data = raw[3 : 3 + byte_count]
         return [x[0] for x in struct.iter_unpack('>H', data)]
@@ -51,11 +53,9 @@ def read_modbus_response(conn):
         return None
 
 def to_signed(val):
-    if val > 32768:
-        return val - 65536
+    if val > 32768: return val - 65536
     return val
 
-# --- WORKER: INVERTER POLLER ---
 def inverter_server():
     global current_inverter_conn, latest_data_json
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -72,68 +72,51 @@ def inverter_server():
             
             while True:
                 try:
-                    # 1. READ SENSORS (200-240)
-                    conn.send(build_read_packet(200, 40))
-                    time.sleep(0.1)
-                    vals = read_modbus_response(conn)
+                    with modbus_lock:
+                        # 1. READ SENSORS (200-240)
+                        conn.send(build_read_packet(200, 40))
+                        time.sleep(0.1)
+                        vals = read_modbus_response(conn)
 
-                    # 2. READ SETTING (331)
-                    conn.send(build_read_packet(331, 1))
-                    time.sleep(0.1)
-                    vals_setting = read_modbus_response(conn)
-                    
-                    if vals and vals_setting:
-                        charge_val = vals_setting[0]
+                        # 2. READ SETTINGS (Block read 301-331 to save time)
+                        # We read a range to get both Mode (301) and Charge (331)
+                        # But they are far apart, so we do two small reads for speed.
                         
-                        v_grid      = vals[2] / 10.0
-                        f_grid      = vals[3] / 100.0 # Reg 203: Grid Freq
-                        v_out       = vals[5] / 10.0
-                        f_out       = vals[6] / 100.0 # Reg 206: Out Freq?
-                        v_batt      = vals[15] / 10.0
-                        v_pv        = vals[13] / 10.0
+                        vals_mode = None
+                        vals_charge = None
                         
-                        p_pv        = vals[9]   # PV Power
-                        p_batt_flow = to_signed(vals[8])  # Reg 208
-                        p_load      = vals[14]            # Reg 214
-                        
-                        # --- CALCULATIONS ---
-                        # Currents (I = P/V)
-                        i_batt = round(abs(p_batt_flow) / v_batt, 1) if v_batt > 0 else 0
-                        i_pv   = round(p_pv / v_pv, 1) if v_pv > 0 else 0
-                        i_out  = round(p_load / v_out, 1) if v_out > 0 else 0
-                        
-                        # Apparent Power (VA) = V * A
-                        p_apparent = round(v_out * i_out)
-                        
-                        soc_guess = vals[29] # Reg 229
+                        if vals:
+                            # Read Mode (301)
+                            conn.send(build_read_packet(301, 1))
+                            time.sleep(0.1)
+                            vals_mode = read_modbus_response(conn)
+                            
+                            # Read Charge (331)
+                            conn.send(build_read_packet(331, 1))
+                            time.sleep(0.1)
+                            vals_charge = read_modbus_response(conn)
 
+                    if vals and vals_mode and vals_charge:
+                        p_batt_flow = to_signed(vals[8])
+                        v_batt = vals[15] / 10.0
+                        
                         latest_data_json = {
-                            "grid_charge_setting": charge_val, 
-                            "status_raw":   vals[1],        
+                            "output_mode":  vals_mode[0],   # <--- REAL FEEDBACK
+                            "grid_charge_setting": vals_charge[0], 
                             
-                            "grid_volt":    v_grid, 
-                            "grid_freq":    f_grid,  # <--- NEW
-                            
-                            "ac_out_volt":  v_out,
-                            "ac_out_freq":  f_out,   # <--- NEW
-                            "ac_load_watt": p_load,
-                            "ac_out_va":    p_apparent, # <--- NEW (Calculated)
-                            "ac_out_amp":   i_out,      # <--- NEW (Calculated)
-                            
+                            "grid_volt":    vals[2] / 10.0, 
+                            "grid_freq":    vals[3] / 100.0,
+                            "ac_out_volt":  vals[5] / 10.0,
+                            "ac_load_watt": vals[14],
                             "batt_volt":    v_batt,
                             "batt_power_watt": p_batt_flow,
-                            "batt_current": i_batt,  # <--- NEW
-                            "batt_soc":     soc_guess,
-                            
-                            "pv_input_volt": v_pv, 
-                            "pv_input_watt": p_pv,         
-                            "pv_current":    i_pv,   # <--- NEW
-                            
+                            "batt_soc":     vals[29],
+                            "pv_input_watt": vals[9],         
                             "inverter_temp": vals[19] / 10.0 if vals[19] < 1000 else vals[19],
                             
-                            # DEBUG: Expose mystery registers to find other sensors
-                            "debug_reg_204": vals[4],
-                            "debug_reg_207": vals[7]
+                            # Calculated
+                            "batt_current": round(abs(p_batt_flow) / v_batt, 1) if v_batt > 0 else 0,
+                            "pv_current":   round(vals[9] / (vals[13]/10.0), 1) if vals[13] > 0 else 0
                         }
 
                     time.sleep(POLL_INTERVAL)
@@ -146,7 +129,6 @@ def inverter_server():
             if current_inverter_conn: current_inverter_conn.close()
             current_inverter_conn = None
 
-# --- WORKER: COMMAND API ---
 def control_server():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -157,25 +139,29 @@ def control_server():
         client, _ = s.accept()
         try:
             req = client.recv(1024).strip().decode().upper()
+            if not req: continue
+
             if req == "JSON":
                 client.send(json.dumps(latest_data_json).encode())
             elif current_inverter_conn:
+                cmd_packet = None
                 if req == "CHARGE_ON":
-                    current_inverter_conn.send(build_write_packet(331, 2))
-                    client.send(b"OK")
+                    cmd_packet = build_write_packet(331, 2)
                 elif req == "CHARGE_OFF":
-                    current_inverter_conn.send(build_write_packet(331, 3))
-                    client.send(b"OK")
+                    cmd_packet = build_write_packet(331, 3)
                 elif req.startswith("MODE_"):
                     val = int(req.split("_")[1])
-                    current_inverter_conn.send(build_write_packet(301, val))
+                    cmd_packet = build_write_packet(301, val)
+
+                if cmd_packet:
+                    with modbus_lock:
+                        current_inverter_conn.send(cmd_packet)
+                        read_modbus_response(current_inverter_conn) # Flush buffer
                     client.send(b"OK")
             else:
                 client.send(b"OFFLINE")
-        except:
-            pass
-        finally:
-            client.close()
+        except: pass
+        finally: client.close()
 
 if __name__ == "__main__":
     t1 = threading.Thread(target=inverter_server)
