@@ -343,9 +343,9 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
-Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
+Status: The official app will show "Offline". This is normal and indicates the hijack is working.
 
-Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
 
 
