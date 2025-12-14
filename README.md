@@ -148,6 +148,99 @@ command_line:
       command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
       icon: mdi:flash
 
+template:
+  - sensor:
+      - name: "PV Current"
+        unique_id: inv_pv_current
+        unit_of_measurement: "A"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}"
+        
+      - name: "Battery Current"
+        unique_id: inv_batt_current
+        unit_of_measurement: "A"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
+        
+  - sensor:
+      - name: "BMS Battery Percentage"
+        unique_id: inv_batt_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}
+
+      - name: "PV Current"
+        unique_id: inv_pv_current
+        unit_of_measurement: "A"
+        device_class: current
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}
+  - sensor:
+      - name: "Battery Power Flow"
+        unique_id: inv_batt_power
+        unit_of_measurement: "W"
+        device_class: power
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}
+          
+  - sensor:
+      - name: "Grid Voltage"
+        unique_id: inv_grid_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}
+
+  - sensor:
+      - name: "Output Voltage"
+        unique_id: inv_out_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}
+
+  - sensor:
+      - name: "House Load"
+        unique_id: inv_house_load
+        unit_of_measurement: "W"
+        device_class: power
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'ac_load_watt') }}
+
+  - sensor:
+      - name: "Battery Voltage (Inverter)"
+        unique_id: inv_batt_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}
+
+  - sensor:
+      - name: "PV Input Voltage"
+        unique_id: inv_pv_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}
+
+  - sensor:
+      - name: "PV Input Power"
+        unique_id: inv_pv_power
+        unit_of_measurement: "W"
+        device_class: power
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}
+
+  - sensor:
+      - name: "Inverter Temperature"
+        unique_id: inv_temp
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state: >
+          {{ state_attr('sensor.inverter_bridge_data', 'inverter_temp') }}
+        
+
+
 ```
 
 Automation 1 :
@@ -238,6 +331,7 @@ Updates: Your inverter will no longer receive firmware updates from the cloud (w
 Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
 
 Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
 
 
