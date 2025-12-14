@@ -132,7 +132,44 @@ template:
       - name: "Battery SOC"
         unit_of_measurement: "%"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}"
+
+shell_command:
+  # This sends "MODE_0", "MODE_2", etc. to the bridge
+  set_inverter_mode: 'echo "{{ mode_code }}" | nc -w 1 192.168.0.105 9999'
+
+# --- PRIORITY MODE SELECTOR ---
+input_select:
+  inverter_mode:
+    name: Inverter Output Source Priority
+    options:
+      - "Utility First (UTI)"
+      - "Solar First (SOL)"
+      - "SBU (Solar-Batt-Util)"
+      - "SUB (Solar-Util-Batt)"
+      - "SUF (GRID Feedback)"
+    icon: mdi:source-branch
+
 ```
+
+Automation:
+```yaml
+alias: "Inverter: Sync Priority Mode"
+description: ""
+triggers:
+  - entity_id: input_select.inverter_mode
+    trigger: state
+actions:
+  - data:
+      mode_code: >
+        {% if trigger.to_state.state == 'Utility First (UTI)' %} MODE_0 {% elif
+        trigger.to_state.state == 'Solar First (SOL)' %} MODE_1 {% elif
+        trigger.to_state.state == 'SBU (Solar-Batt-Util)' %} MODE_2 {% elif
+        trigger.to_state.state == 'SUB (Solar-Util-Batt)' %} MODE_3 {% elif
+        trigger.to_state.state == 'SUF (GRID Feedback)' %} MODE_4 {% endif %}
+    action: shell_command.set_inverter_mode
+```
+
+
 
 ### 📊 Register Map
 
@@ -163,5 +200,6 @@ Updates: Your inverter will no longer receive firmware updates from the cloud (w
 Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
 
 Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
 
