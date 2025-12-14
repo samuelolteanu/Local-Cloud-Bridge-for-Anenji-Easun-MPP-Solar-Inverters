@@ -138,17 +138,33 @@ command_line:
         - batt_soc
         - batt_current
         - pv_current
+        - grid_power_watt
 
   - switch:
-      name: "Grid Charging"
-      command_timeout: 8 # Allow HA more time to wait for the command
-      # Update 'nc' timeouts to 5s
-      command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
-      command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-      command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
-      icon: mdi:flash
+        name: "Grid Charging"
+        unique_id: grid_chargingz
+        command_timeout: 5
+        
+        # ON/OFF Commands
+        command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
+        command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
+        
+        # State Check
+        command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
+        
+        # CRITICAL MISSING LINE:
+        # Tells HA: "If the number is 2, the switch is ON. Anything else is OFF."
+        value_template: "{{ value == '2' }}"
+        
+        icon: mdi:flash
 
 template:
+  - sensor:
+      - name: "Grid Input Power"
+        unique_id: inv_grid_power
+        unit_of_measurement: "W"
+        device_class: power
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
   - sensor:
       - name: "PV Current"
         unique_id: inv_pv_current
@@ -239,8 +255,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'inverter_temp') }}
         
-
-
 ```
 
 Automation 1 :
@@ -308,6 +322,7 @@ actions:
 | :--- | :--- | :--- |
 | **202** | Grid Voltage | 0.1 V |
 | **203** | Grid Frequency | 0.01 Hz |
+| **204** | Grid Power | Watts (Power drawn from Grid) |
 | **205** | Output Voltage | 0.1 V |
 | **208** | Battery Power | Signed Int (Positive = Discharge, Negative = Charge) |
 | **209** | PV Power | Watts |
@@ -331,6 +346,7 @@ Updates: Your inverter will no longer receive firmware updates from the cloud (w
 Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
 
 Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
 
 
