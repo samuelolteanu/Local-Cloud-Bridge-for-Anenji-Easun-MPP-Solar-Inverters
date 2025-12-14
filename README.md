@@ -94,49 +94,6 @@ systemctl enable --now inverter-bridge
 Add this to your configuration.yaml. We use nc (Netcat) instead of Python for the command line to ensure sub-1-second performance.
 
 ```yaml
-command_line:
-  - sensor:
-      name: "Inverter Bridge Data"
-      command: 'echo "JSON" | nc -w 1 192.168.0.105 9999'
-      scan_interval: 1
-      value_template: "{{ value_json.batt_volt }}"
-      json_attributes:
-        - grid_charge
-        - grid_volt
-        - ac_load_watt
-        - ac_out_volt
-        - batt_volt
-        - batt_power
-        - batt_soc
-        - batt_current
-        - pv_watt
-        - pv_volt
-        - temp
-
-  - switch:
-      name: "Grid Charging"
-      scan_interval: 2
-      command_on: 'echo "CHARGE_ON" | nc -w 1 192.168.0.105 9999'
-      command_off: 'echo "CHARGE_OFF" | nc -w 1 192.168.0.105 9999'
-      command_state: 'echo "JSON" | nc -w 1 192.168.0.105 9999 | jq ".grid_charge"'
-      value_template: "{{ value == '2' }}"
-
-template:
-  - sensor:
-      - name: "House Load"
-        unit_of_measurement: "W"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_watt') }}"
-      - name: "Battery Power"
-        unit_of_measurement: "W"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_power') }}"
-      - name: "Battery SOC"
-        unit_of_measurement: "%"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}"
-
-shell_command:
-  # This sends "MODE_0", "MODE_2", etc. to the bridge
-  set_inverter_mode: 'echo "{{ mode_code }}" | nc -w 1 192.168.0.105 9999'
-
 # --- PRIORITY MODE SELECTOR ---
 input_select:
   inverter_mode:
@@ -149,26 +106,107 @@ input_select:
       - "SUF (GRID Feedback)"
     icon: mdi:source-branch
 
+#--- CONTROL LOGIC ---
+shell_command:
+  set_inverter_uti: '/bin/sh -c "echo MODE_0 | nc -w 5 192.168.0.105 9999"'
+  set_inverter_sol: '/bin/sh -c "echo MODE_1 | nc -w 5 192.168.0.105 9999"'
+  set_inverter_sbu: '/bin/sh -c "echo MODE_2 | nc -w 5 192.168.0.105 9999"'
+  set_inverter_sub: '/bin/sh -c "echo MODE_3 | nc -w 5 192.168.0.105 9999"'
+  set_inverter_suf: '/bin/sh -c "echo MODE_4 | nc -w 5 192.168.0.105 9999"'
+
+command_line:
+  - sensor:
+      name: "Inverter Bridge Data"
+      # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
+      command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
+      scan_interval: 1  # 2 seconds is a good balance
+      
+      
+      value_template: "{{ value_json.batt_volt }}"
+      json_attributes:
+        - output_mode
+        - grid_charge_setting
+        - grid_volt 
+        - batt_volt
+        - ac_load_watt
+        - ac_out_volt  
+        - ac_out_amp       
+        - pv_input_volt
+        - pv_input_watt
+        - inverter_temp
+        - batt_power_watt
+        - batt_soc
+        - batt_current
+        - pv_current
+
+  - switch:
+      name: "Grid Charging"
+      command_timeout: 8 # Allow HA more time to wait for the command
+      # Update 'nc' timeouts to 5s
+      command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
+      command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
+      command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
+      icon: mdi:flash
+
 ```
 
-Automation:
+Automation 1 :
 ```yaml
-alias: "Inverter: Sync Priority Mode"
-description: ""
+alias: "Inverter: Set Priority Mode"
+description: Sends command to inverter when Dropdown changes in UI
 triggers:
   - entity_id: input_select.inverter_mode
     trigger: state
 actions:
-  - data:
-      mode_code: >
-        {% if trigger.to_state.state == 'Utility First (UTI)' %} MODE_0 {% elif
-        trigger.to_state.state == 'Solar First (SOL)' %} MODE_1 {% elif
-        trigger.to_state.state == 'SBU (Solar-Batt-Util)' %} MODE_2 {% elif
-        trigger.to_state.state == 'SUB (Solar-Util-Batt)' %} MODE_3 {% elif
-        trigger.to_state.state == 'SUF (GRID Feedback)' %} MODE_4 {% endif %}
-    action: shell_command.set_inverter_mode
-```
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'Utility First (UTI)' }}"
+        sequence:
+          - action: shell_command.set_inverter_uti
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'Solar First (SOL)' }}"
+        sequence:
+          - action: shell_command.set_inverter_sol
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'SBU (Solar-Batt-Util)' }}"
+        sequence:
+          - action: shell_command.set_inverter_sbu
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'SUB (Solar-Util-Batt)' }}"
+        sequence:
+          - action: shell_command.set_inverter_sub
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == 'SUF (GRID Feedback)' }}"
+        sequence:
+          - action: shell_command.set_inverter_suf
+mode: single
 
+```
+Automation 2 :
+```yaml
+alias: "Inverter: Sync Dropdown from Device"
+triggers:
+  - entity_id: sensor.inverter_bridge_data
+    attribute: output_mode
+    trigger: state
+actions:
+  - action: input_select.select_option
+    target:
+      entity_id: input_select.inverter_mode
+    data:
+      option: >
+        {% set mode = state_attr('sensor.inverter_bridge_data', 'output_mode') |
+        int(default=0) %} {% if mode == 0 %} Utility First (UTI) {% elif mode ==
+        1 %} Solar First (SOL) {% elif mode == 2 %} SBU (Solar-Batt-Util) {%
+        elif mode == 3 %} SUB (Solar-Util-Batt) {% elif mode == 4 %} SUF (GRID
+        Feedback) {% endif %}
+
+```
 
 
 ### 📊 Register Map
@@ -200,6 +238,7 @@ Updates: Your inverter will no longer receive firmware updates from the cloud (w
 Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
 
 Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
 
 
