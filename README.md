@@ -18,7 +18,7 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ## 📋 Prerequisites
 
-1.  **Compatible Inverter:** Any hybrid inverter using the "Pro" WiFi dongle (typically blue or black) that connects to `server.desmonitor.com` or similar Chinese cloud servers.
+1.  **Compatible Inverter:** Any hybrid inverter using the WiFi dongle (typically blue or black) that connects to `server.desmonitor.com` or similar Chinese cloud servers.
     * *Verified Hardware:* ANENJI ANJ-6200W-48V
 2.  **Network Control:** You need a method to redirect traffic.
     * *Best:* **OpenWRT Router** (or pfSense/MikroTik) to create a NAT Hijack rule.
@@ -163,4 +163,5 @@ Updates: Your inverter will no longer receive firmware updates from the cloud (w
 Status: The official app will show "Offline" or "System Abnormal." This is normal and indicates the hijack is working.
 
 Would you like me to help you draft the inverter_bridge.py script mentioned in Step 2, based on the architecture and register map
+
 
