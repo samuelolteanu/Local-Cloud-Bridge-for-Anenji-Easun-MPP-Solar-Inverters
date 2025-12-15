@@ -23,6 +23,7 @@ latest_data_json = {
     "batt_power_watt": 0,
     "grid_power_watt": 0,
     "pv_input_watt": 0,
+    "pv_input_volt": 0,  # <--- Added default
     "batt_soc": 0
 }
 
@@ -46,26 +47,23 @@ def build_read_packet(start, count):
     payload = struct.pack('>BBHH', 1, 3, start, count)
     return payload + modbus_crc(payload)
 
-# NEW: Aggressive Buffer Cleaner
 def flush_buffer(conn):
     try:
-        conn.settimeout(0.01) # Very fast timeout
+        conn.settimeout(0.01)
         while True:
             chunk = conn.recv(1024)
             if not chunk: break
     except:
-        pass # Timeout means buffer is empty (Good!)
+        pass
     finally:
-        conn.settimeout(2.0) # Restore normal timeout
+        conn.settimeout(2.0)
 
 def read_modbus_response(conn):
     try:
         raw = conn.recv(1024)
         if not raw or len(raw) < 5: return None
-        # Basic Validation
         if raw[1] > 4: return None 
         byte_count = raw[2]
-        # Safety: Ensure we actually received enough bytes
         if len(raw) < (3 + byte_count): return None
         
         data = raw[3 : 3 + byte_count]
@@ -100,48 +98,52 @@ def inverter_server():
                         # 1. FLUSH & READ SENSORS
                         flush_buffer(conn) 
                         conn.send(build_read_packet(200, 40))
-                        time.sleep(0.1) # Wait for reply
+                        time.sleep(0.1) 
                         vals = read_modbus_response(conn)
 
-                        # 2. FLUSH & READ SETTINGS (Smart Logic)
+                        # 2. FLUSH & READ SETTINGS
                         vals_mode = None
                         vals_charge = None
                         is_cooldown = (time.time() - last_cmd_time) < 10.0
                         
                         if (loop_counter % 5 == 0) and (not is_cooldown):
-                            # Read Mode 301
-                            flush_buffer(conn) # Clean again before next request
+                            flush_buffer(conn)
                             conn.send(build_read_packet(301, 1))
                             time.sleep(0.1)
                             vals_mode = read_modbus_response(conn)
                             
-                            # Read Charge 331
                             flush_buffer(conn)
                             conn.send(build_read_packet(331, 1))
                             time.sleep(0.1)
                             vals_charge = read_modbus_response(conn)
 
-                    # 3. UPDATE JSON (Thread-Safe Merge)
-                    if vals and len(vals) >= 40: # Ensure we got the full block
+                    # 3. UPDATE JSON
+                    if vals and len(vals) >= 40:
                         p_batt_flow = to_signed(vals[8])
                         v_batt = vals[15] / 10.0
+                        v_ac_out = vals[5] / 10.0
                         
                         latest_data_json.update({
                             "grid_volt":    vals[2] / 10.0, 
                             "grid_power_watt": vals[4],
                             "grid_freq":    vals[3] / 100.0,
-                            "ac_out_volt":  vals[5] / 10.0,
+                            
+                            "ac_out_volt":  v_ac_out,
+                            "ac_out_amp":   round(vals[14] / v_ac_out, 1) if v_ac_out > 0 else 0.0, # <--- Restored
                             "ac_load_watt": vals[14],
+                            
                             "batt_volt":    v_batt,
                             "batt_power_watt": p_batt_flow,
                             "batt_soc":     vals[29],
-                            "pv_input_watt": vals[9],         
+                            
+                            "pv_input_watt": vals[9],
+                            "pv_input_volt": vals[13] / 10.0, # <--- FIXED: Reg 213 added
+                            
                             "inverter_temp": vals[19] / 10.0 if vals[19] < 1000 else vals[19],
                             "batt_current": round(abs(p_batt_flow) / v_batt, 1) if v_batt > 0 else 0,
                             "pv_current":   round(vals[9] / (vals[13]/10.0), 1) if vals[13] > 0 else 0
                         })
 
-                        # Update SETTINGS (ONLY if we actually read them cleanly)
                         if vals_mode:
                             latest_data_json["output_mode"] = vals_mode[0]
                         
@@ -180,7 +182,6 @@ def control_server():
             elif current_inverter_conn and req:
                 cmd_packet = None
                 
-                # PREPARE COMMAND
                 if req == "CHARGE_ON":
                     cmd_packet = build_write_packet(331, 2)
                     latest_data_json["grid_charge_setting"] = 2
@@ -194,10 +195,10 @@ def control_server():
 
                 if cmd_packet:
                     with modbus_lock:
-                        flush_buffer(current_inverter_conn) # Flush before writing!
+                        flush_buffer(current_inverter_conn)
                         current_inverter_conn.send(cmd_packet)
-                        read_modbus_response(current_inverter_conn) # Read confirmation
-                        last_cmd_time = time.time() # Start Cooldown
+                        read_modbus_response(current_inverter_conn)
+                        last_cmd_time = time.time()
                             
                     client.send(b"OK")
             else:
