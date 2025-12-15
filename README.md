@@ -299,17 +299,36 @@ triggers:
   - entity_id: sensor.inverter_bridge_data
     attribute: output_mode
     trigger: state
+conditions:
+  # 1. SAFETY CHECK: Only proceed if the sensor is NOT unavailable
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: sensor.inverter_bridge_data
+        state: "unavailable"
+      - condition: state
+        entity_id: sensor.inverter_bridge_data
+        state: "unknown"
+
+  # 2. DOUBLE CHECK: Ensure the 'output_mode' attribute actually exists
+  - condition: template
+    value_template: >
+      {{ state_attr('sensor.inverter_bridge_data', 'output_mode') is not none }}
+
 actions:
   - action: input_select.select_option
     target:
       entity_id: input_select.inverter_mode
     data:
+      # We can now safely remove 'default=0' because the conditions above guarantee valid data
       option: >
-        {% set mode = state_attr('sensor.inverter_bridge_data', 'output_mode') |
-        int(default=0) %} {% if mode == 0 %} Utility First (UTI) {% elif mode ==
-        1 %} Solar First (SOL) {% elif mode == 2 %} SBU (Solar-Batt-Util) {%
-        elif mode == 3 %} SUB (Solar-Util-Batt) {% elif mode == 4 %} SUF (GRID
-        Feedback) {% endif %}
+        {% set mode = state_attr('sensor.inverter_bridge_data', 'output_mode') | int %}
+        {% if mode == 0 %} Utility First (UTI)
+        {% elif mode == 1 %} Solar First (SOL)
+        {% elif mode == 2 %} SBU (Solar-Batt-Util)
+        {% elif mode == 3 %} SUB (Solar-Util-Batt)
+        {% elif mode == 4 %} SUF (GRID Feedback)
+        {% endif %}
 
 ```
 
@@ -342,6 +361,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
