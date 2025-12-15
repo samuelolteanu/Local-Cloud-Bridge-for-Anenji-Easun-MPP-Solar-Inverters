@@ -120,9 +120,7 @@ command_line:
       # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 1  # 2 seconds is a good balance
-      
-      
-      value_template: "{{ value_json.batt_volt }}"
+      value_template: "Online"
       json_attributes:
         - output_mode
         - grid_charge_setting
@@ -344,6 +342,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
