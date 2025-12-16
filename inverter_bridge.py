@@ -12,6 +12,33 @@ BIND_IP = '0.0.0.0'
 POLL_INTERVAL = 1.0 
 INVERTER_RATED_WATT = 6200 
 
+# --- FAULT CODE MAPPING ---
+FAULT_MAP = {
+    0:  "No Fault",
+    1:  "Over temperature of inverter module",
+    2:  "Over temperature of DCDC module",
+    3:  "Battery voltage is too high",
+    4:  "Over temperature of PV module",
+    5:  "Output short circuited",
+    6:  "Output voltage is too high",
+    7:  "Overload time out",
+    8:  "Bus voltage is too high",
+    9:  "Bus soft start failed",
+    10: "PV over current",
+    11: "PV over voltage",
+    12: "DCDC over current",
+    13: "Over current or surge",
+    14: "Bus voltage is too low",
+    15: "Inverter failed (Self-checking)",
+    18: "Op current offset is too high",
+    19: "BMS Communication Fail",  # User override
+    20: "DC/DC current offset is too high",
+    21: "PV current offset is too high",
+    22: "Output voltage is too low",
+    23: "Inverter negative power",
+    99: "Unknown Fault"
+}
+
 # --- SHARED STATE ---
 current_inverter_conn = None
 modbus_lock = threading.Lock()
@@ -19,6 +46,9 @@ last_cmd_time = 0
 
 latest_data_json = {
     "fault_code": 0,
+    "fault_msg": "No Fault",      
+    "fault_bitmask": 0,
+    "warning_bitmask": 0,
     "charger_priority": 3,
     "output_mode": 0,
     "ac_input_range": 0,
@@ -26,12 +56,12 @@ latest_data_json = {
     "backlight_status": 1,
     "device_status": 0,
     "batt_volt": 0,
-    "ac_load_va": 0,        # Reg 214 (Apparent Output)
-    "ac_load_real_watt": 0, # Reg 213 (Real Output)
+    "ac_load_va": 0,
+    "ac_load_real_watt": 0,
     "ac_load_pct": 0,
     "batt_power_watt": 0,
-    "grid_power_watt": 0,   # Reg 204 (Grid Active)
-    "ac_output_amp": 0,     # <--- FIXED NAME (Reg 211 is Output, not Grid)
+    "grid_power_watt": 0,
+    "ac_output_amp": 0,
     "pv_input_watt": 0,
     "pv_input_volt": 0,
     "pv_current": 0,
@@ -113,17 +143,18 @@ def inverter_server():
             while True:
                 with modbus_lock:
                     try:
-                        # 1. READ SENSORS (Block 200)
+                        # 1. READ SENSORS
                         flush_buffer(conn) 
                         conn.send(build_read_packet(200, 40))
                         time.sleep(0.1) 
                         vals = read_modbus_response(conn)
 
-                        # 2. READ FAULT CODES
+                        # 2. READ FAULT CODES (Block 100)
+                        # We read 6 registers (100-105) to cover Status, Code, and Bitmasks
                         vals_fault = None
                         if loop_counter % 2 == 0:
                             flush_buffer(conn)
-                            conn.send(build_read_packet(100, 5))
+                            conn.send(build_read_packet(100, 6)) 
                             time.sleep(0.1)
                             vals_fault = read_modbus_response(conn)
 
@@ -164,36 +195,72 @@ def inverter_server():
                                 latest_data_json["soc_cutoff"] = vals_soc[2]
 
                         # --- UPDATE SENSORS JSON ---
-                        if vals_fault and len(vals_fault) >= 2:
-                            latest_data_json["fault_code"] = vals_fault[1]
+                        # v47: FIXED REGISTER MAPPING
+                        if vals_fault and len(vals_fault) >= 5:
+                            # Use vals_fault[1] (Reg 101) which was correct in your original script
+                            numeric_fault = vals_fault[1] 
+                            reg_104 = vals_fault[4]       # Reg 104 (Bitmask)
+                            reg_105 = vals_fault[5] if len(vals_fault) > 5 else 0
+
+                            final_error = 0
+                            
+                            # Priority A: Numeric Fault (from the "Good" register)
+                            if numeric_fault > 0 and numeric_fault < 100:
+                                final_error = numeric_fault
+                            
+                            # Priority B: Bitmasks (Reg 104) - Needed for Error 19
+                            elif (reg_104 & 8):   # Bit 3
+                                final_error = 19
+                            elif (reg_104 & 2):   # Bit 1
+                                final_error = 2   
+                            elif (reg_104 & 4):   # Bit 2
+                                final_error = 7   
+                            
+                            # Priority C: Generic
+                            elif (vals_fault[1] & 4) and final_error == 0: 
+                                final_error = 99 
+
+                            latest_data_json["fault_code"] = final_error
+                            latest_data_json["fault_bitmask"] = reg_104
+                            latest_data_json["warning_bitmask"] = reg_105
+                            
+                            # Lookup Description
+                            latest_data_json["fault_msg"] = FAULT_MAP.get(final_error, f"Unknown Error {final_error}")
 
                         if vals and len(vals) >= 40:
                             v_batt = vals[15] / 10.0
-                            p_load_va = vals[14]       # Reg 214 (Apparent)
-                            p_load_real = vals[13]     # Reg 213 (Real)
+                            p_load_va = vals[14]
+                            p_load_real = vals[13]
                             v_ac_out = vals[5] / 10.0
                             v_pv = vals[19] / 10.0
                             p_pv = vals[23]
                             
+                            p_batt_discharge = vals[8]
+                            p_batt_charge = vals[9]
+                            if p_batt_charge > 0:
+                                batt_power = -p_batt_charge
+                            else:
+                                batt_power = to_signed(p_batt_discharge)
+
                             latest_data_json.update({
-                                "device_status": vals[1],
-                                "grid_volt":    vals[2] / 10.0, 
-                                "grid_power_watt": vals[4],       # Reg 204
-                                "ac_output_amp": vals[11] / 10.0, # <--- Corrected: Reg 211 is Output
+                                "device_status": vals[1], # Reg 201 (Kept from good script)
+                                "grid_volt":    vals[2] / 10.0,
+                                "grid_power_watt": vals[4],
+                                "ac_output_amp": vals[11] / 10.0,
                                 "grid_freq":    vals[3] / 100.0,
                                 "ac_out_volt":  v_ac_out,
                                 "ac_load_va":   p_load_va,
                                 "ac_load_real_watt": p_load_real,
                                 "ac_load_pct":  round(min((p_load_va / INVERTER_RATED_WATT) * 100, 300), 1),
                                 "batt_volt":    v_batt,
-                                "batt_power_watt": to_signed(vals[8]), 
+                                "batt_power_watt": batt_power,
                                 "batt_soc":     vals[29],
                                 "pv_input_watt": p_pv,
                                 "pv_input_volt": v_pv,
                                 "pv_current":    round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
-                                "temp_dc":      vals[26], 
+                                "temp_dc":      vals[26],
                                 "temp_inv":     vals[27],
-                                "batt_current": round(abs(to_signed(vals[8])) / v_batt, 1) if v_batt > 0 else 0
+                                "batt_current": round(abs(batt_power) / v_batt, 1) if v_batt > 0 else 0
                             })
 
                     except:
