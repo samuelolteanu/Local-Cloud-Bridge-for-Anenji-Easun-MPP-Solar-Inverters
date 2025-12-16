@@ -119,7 +119,6 @@ shell_command:
 command_line:
   - sensor:
       name: "Inverter Bridge Data"
-      # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 1  # 2 seconds is a good balance
       value_template: "Online"
@@ -347,7 +346,6 @@ shell_command:
   set_buzzer_nd2: '/bin/sh -c "echo SET_BUZZER_1 | nc -w 5 192.168.0.105 9999"'
   set_buzzer_nd3: '/bin/sh -c "echo SET_BUZZER_2 | nc -w 5 192.168.0.105 9999"'
   set_buzzer_fault: '/bin/sh -c "echo SET_BUZZER_3 | nc -w 5 192.168.0.105 9999"'
-  
   set_backlight_on: '/bin/sh -c "echo SET_BACKLIGHT_1 | nc -w 5 192.168.0.105 9999"'
   set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
 
@@ -400,11 +398,9 @@ command_line:
       command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
       command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
       command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
-      
       # ON only if Priority is 2 (SNU/Solar+Utility)
       value_template: "{{ value == '2' }}"
       icon: mdi:flash
-
 
 template:
   - switch:
@@ -850,6 +846,7 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
