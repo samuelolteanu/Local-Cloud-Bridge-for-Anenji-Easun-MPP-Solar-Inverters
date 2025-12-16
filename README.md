@@ -162,7 +162,7 @@ template:
         unit_of_measurement: "W"
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
-  - sensor:
+
       - name: "PV Current"
         unique_id: inv_pv_current
         unit_of_measurement: "A"
@@ -173,7 +173,6 @@ template:
         unit_of_measurement: "A"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
         
-  - sensor:
       - name: "BMS Battery Percentage"
         unique_id: inv_batt_soc
         unit_of_measurement: "%"
@@ -188,15 +187,14 @@ template:
         device_class: current
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}
-  - sensor:
+
       - name: "Battery Power Flow"
         unique_id: inv_batt_power
         unit_of_measurement: "W"
         device_class: power
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}
-          
-  - sensor:
+
       - name: "Grid Voltage"
         unique_id: inv_grid_voltage
         unit_of_measurement: "V"
@@ -204,7 +202,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}
 
-  - sensor:
       - name: "Output Voltage"
         unique_id: inv_out_voltage
         unit_of_measurement: "V"
@@ -212,7 +209,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}
 
-  - sensor:
       - name: "House Load"
         unique_id: inv_house_load
         unit_of_measurement: "W"
@@ -220,7 +216,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'ac_load_watt') }}
 
-  - sensor:
       - name: "Battery Voltage (Inverter)"
         unique_id: inv_batt_voltage
         unit_of_measurement: "V"
@@ -228,7 +223,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}
 
-  - sensor:
       - name: "PV Input Voltage"
         unique_id: inv_pv_voltage
         unit_of_measurement: "V"
@@ -236,7 +230,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}
 
-  - sensor:
       - name: "PV Input Power"
         unique_id: inv_pv_power
         unit_of_measurement: "W"
@@ -244,7 +237,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}
 
-  - sensor:
       - name: "Inverter Temperature"
         unique_id: inv_temp
         unit_of_measurement: "°C"
@@ -865,6 +857,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
