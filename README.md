@@ -77,11 +77,122 @@ option dest_port '18899'
 option target 'MASQUERADE'
 ```
 
-#### Method B: DNS Rewrite
-If you cannot edit firewall rules, use Pi-hole or AdGuard Home:
-1.  Check your logs to see what domain the inverter requests (e.g., `server.desmonitor.com`).
-2.  Add a DNS Rewrite: `server.desmonitor.com` ➡ `192.168.0.105`.
+#### Method B: DNS Rewrite (Pi-hole / AdGuard Home)
 
+**⚠️ Important:** DNS rewrite alone is NOT sufficient. DNS can only change IP addresses, not TCP ports. You must also configure iptables on your bridge server to complete the redirect.
+
+**Step 1: Find Your Inverter's Cloud Server**
+
+Check your DNS server's query log to identify the domain:
+
+- **Pi-hole:** Go to Query Log and filter by your inverter's IP
+- **AdGuard Home:** Go to Query Log and look for requests from your inverter (e.g., `192.168.0.111`)
+- Common domains: `server.desmonitor.com`, `server.smarten-ess.com`, or similar
+
+**Step 2: Configure DNS Rewrite**
+
+Add a DNS rewrite rule pointing the cloud server to your bridge server:
+
+- **Pi-hole:** 
+  - Go to **Local DNS** → **DNS Records**
+  - Add: `server.desmonitor.com` → `192.168.0.105` (your bridge IP)
+
+- **AdGuard Home:**
+  - Go to **Filters** → **DNS Rewrites** → **Add DNS Rewrite**
+  - Domain: `server.desmonitor.com`
+  - Answer: `192.168.0.105` (your bridge IP)
+
+**Step 3: Enable IP Forwarding on Bridge Server**
+
+SSH into your bridge server and enable packet forwarding:
+```bash
+# Enable IP forwarding temporarily
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Make it permanent across reboots
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p
+```
+
+**Step 4: Configure iptables Port Redirect**
+
+Add a NAT rule to redirect incoming traffic on port 18899:
+```bash
+# Create the redirect rule
+iptables -t nat -A PREROUTING -p tcp --dport 18899 -j REDIRECT --to-port 18899
+
+# Save the rules
+mkdir -p /etc/iptables
+iptables-save > /etc/iptables/rules.v4
+```
+
+**Step 5: Make iptables Rules Persistent**
+
+Create a systemd service to restore rules after reboot:
+```bash
+cat > /etc/systemd/system/iptables-restore.service << 'EOF'
+[Unit]
+Description=Restore iptables rules for Inverter Bridge
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start the service
+systemctl enable iptables-restore
+systemctl start iptables-restore
+```
+
+**Step 6: Verify Configuration**
+
+Test that everything is set up correctly:
+```bash
+# 1. Check IP forwarding is enabled
+cat /proc/sys/net/ipv4/ip_forward
+# Expected output: 1
+
+# 2. Verify iptables rule exists
+iptables -t nat -L PREROUTING -n -v
+# Should show a REDIRECT rule for tcp dpt:18899
+
+# 3. Test DNS resolution (from another device on your network)
+nslookup server.desmonitor.com
+# Should return: 192.168.0.105 (your bridge server IP)
+
+# 4. Check bridge service is running
+systemctl status inverter-bridge
+# Should show: active (running)
+```
+
+**Troubleshooting Method B:**
+
+| Issue | Solution |
+|-------|----------|
+| Inverter still shows offline | Check DNS server query log - confirm requests resolve to your bridge IP |
+| "Connection refused" error | Verify bridge script is running: `systemctl status inverter-bridge` |
+| Rules disappear after reboot | Check if systemd service is enabled: `systemctl is-enabled iptables-restore` |
+| iptables command fails | Install iptables: `apt install iptables` (Debian/Ubuntu) or `yum install iptables` (CentOS/RHEL) |
+
+**Note for Proxmox LXC Users:**
+
+If your bridge server runs in an LXC container, you must enable nesting to use iptables:
+```bash
+# On Proxmox host, edit container config (replace CTID with your container ID)
+nano /etc/pve/lxc/CTID.conf
+
+# Add this line:
+features: nesting=1
+
+# Save and restart container
+pct reboot CTID
+```
 ---
 
 ### Step 2: Install the Bridge Service
@@ -692,4 +803,5 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
