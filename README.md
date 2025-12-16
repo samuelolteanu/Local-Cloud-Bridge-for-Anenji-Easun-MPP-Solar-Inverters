@@ -96,8 +96,25 @@ systemctl enable --now inverter-bridge
 Add this to your configuration.yaml. We use nc (Netcat) instead of Python for the command line to ensure sub-1-second performance.
 
 ```yaml
-**# --- PRIORITY MODE SELECTOR ---
 input_select:
+  
+  inverter_buzzer_mode:
+    name: "Inverter Buzzer Mode"
+    options:
+      - "Mute (nd1)"
+      - "Source/Warn/Fault (nd2)"
+      - "Warn/Fault (nd3)"
+      - "Fault Only (nd4)"
+    icon: mdi:volume-high
+
+  inverter_ac_range:
+    name: "AC Input Range"
+    options:
+      - "Appliances (APL)"
+      - "UPS (UPS)"
+      - "Generator (GEN)"
+    icon: mdi:sine-wave
+
   inverter_mode:
     name: Inverter Output Source Priority
     options:
@@ -107,6 +124,35 @@ input_select:
       - "SUB (Solar-Util-Batt)"
       - "SUF (GRID Feedback)"
     icon: mdi:source-branch
+    
+  inverter_charger_priority:
+    name: Charger Source Priority
+    options:
+      - "Solar First (CSO)"
+      - "Solar + Utility (SNU)"
+      - "Solar Only (OSO)"
+    icon: mdi:battery-charging
+
+  inverter_max_ac_amps:
+    name: "Max AC Charge Amps"
+    options:
+      - "5"
+      - "10"
+      - "15"
+      - "20"
+      - "25"
+      - "30"
+      - "35"
+      - "40"
+      - "45"
+      - "50"
+      - "55"
+      - "60"
+      - "65"
+      - "70"
+      - "75"
+      - "80"
+    icon: mdi:current-ac
 
 #--- CONTROL LOGIC ---
 shell_command:
@@ -132,12 +178,37 @@ shell_command:
   set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
 
 command_line:
+  - switch:
+      name: "Grid Charging"
+      unique_id: grid_chargingz
+      command_timeout: 5
+      command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
+      command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
+      command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
+      # ON only if Priority is 2 (SNU/Solar+Utility)
+      value_template: "{{ value == '2' }}"
+      icon: mdi:flash
   - sensor:
       name: "Inverter Bridge Data"
+      # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 1  # 2 seconds is a good balance
       value_template: "Online"
       json_attributes:
+        - ac_output_amp
+        - ac_load_real_watt
+        - ac_load_va
+        - grid_current
+        - buzzer_mode    
+        - backlight_status
+        - fault_code
+        - ac_input_range
+        - max_ac_amps
+        - temp_dc     
+        - temp_inv
+        - device_status   
+        - ac_load_pct  
+        - charger_priority
         - output_mode
         - grid_charge_setting
         - grid_volt 
@@ -153,20 +224,20 @@ command_line:
         - batt_current
         - pv_current
         - grid_power_watt
+        - soc_back_to_grid   # Prg 43
+        - soc_back_to_batt   # Prg 44
+        - soc_cutoff         # Prg 45
 
   - switch:
         name: "Grid Charging"
         unique_id: grid_chargingz
         command_timeout: 5
-        
         # ON/OFF Commands
         command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
         command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-        
         # State Check
         command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
         value_template: "{{ value == '2' }}"
-        
         icon: mdi:flash
 
 template:
@@ -861,6 +932,7 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
