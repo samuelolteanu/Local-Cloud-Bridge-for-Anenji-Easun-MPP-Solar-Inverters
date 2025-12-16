@@ -21,22 +21,48 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ## 📋 Prerequisites
 
-1.  **Compatible Inverter:** Any hybrid inverter using the WiFi dongle or build in Wifi Card that connects to `server.desmonitor.com` or similar Chinese cloud servers.
-    * *Verified Hardware:* ANENJI ANJ-6200W-48V
-2.  **Network Control:** You need a method to redirect traffic.
-    * *Best:* **OpenWRT Router** (or pfSense/MikroTik) to create a NAT Hijack rule.
-    * *Alternative:* **Local DNS** (Pi-hole / AdGuard Home) to rewrite the server domain.
-3.  **Local Server:** A Raspberry Pi, Proxmox LXC, or Docker container to run the bridge script.
+1. **Compatible Inverter:** Any hybrid inverter using the WiFi dongle or built-in WiFi card that connects to `server.desmonitor.com` (IP: `8.218.202.213`) or similar Chinese cloud servers.
+   * *Verified Hardware:* ANENJI ANJ-6200W-48V
+
+2. **Network Control:** You need a way to intercept your inverter's traffic and redirect it to your local server. Choose the method that matches your network setup:
+
+   **Method A: Router with Firewall Access (Recommended)**
+   - Works with: OpenWRT, pfSense, OPNsense, MikroTik, or most consumer routers with "Port Forwarding" features
+   - This is the cleanest solution because it works at the network layer
+   - You'll create a NAT rule that redirects TCP port 18899 traffic to your bridge server
+
+   **Method B: DNS Rewrite + Bridge Server with iptables**
+   - Works with: AdGuard Home, Pi-hole, or any DNS server + Linux bridge server with root access
+   - Use this if you can't access your router's firewall settings
+   - **Important:** DNS rewrite alone is NOT enough - you also need iptables rules on your bridge server
+   - This combines DNS resolution with local port forwarding
+
+   **❌ What WON'T Work:**
+   - DNS rewrite alone (AdGuard/Pi-hole without iptables) - DNS can only change IP addresses, not port numbers
+   - Manually editing hosts files on the inverter (these devices don't typically allow this)
+
+3. **Local Server:** A Raspberry Pi, Proxmox LXC, or Docker container to run the bridge script. This server must:
+   - Be always-on and have a static IP address (e.g., `192.168.0.105`)
+   - Run Python 3.6 or newer
+   - Have network access to your inverter
+
+---
+
+**Which method should you choose?**
+
+- **If you have an OpenWRT/pfSense router or can access your router's advanced settings:** Use Method A - it's simpler and more reliable.
+- **If you only have AdGuard Home/Pi-hole and cannot touch your router:** Use Method B - but be prepared to configure both DNS and iptables.
+- **If you're unsure:** Check if your router has a "Port Forwarding" or "Virtual Server" page in its admin panel. If yes, use Method A. If no, use Method B.
 
 ---
 
 ## ⚙️ Architecture
 
-The inverter is hard-coded to communicate with a remote cloud server on TCP port **18899**. We perform a "Man-in-the-Middle" attack on our own device:
+The inverter is hard-coded to communicate with a remote cloud server (`server.desmonitor.com` / `8.218.202.213`) on TCP port **18899**. We perform a "Man-in-the-Middle" attack on our own device:
 
-1.  **The Hijack:** The router intercepts traffic destined for the cloud (TCP 18899) and redirects it to the local server IP (`192.168.0.105`).
-2.  **The Bridge:** The `inverter_bridge.py` script listens on port 18899. It accepts the connection, reads the Modbus registers, and exposes the data via a lightweight JSON API.
-3.  **The Interface:** Home Assistant queries this API every second using `netcat` (nc) for zero-latency updates.
+1. **The Hijack:** The router intercepts traffic destined for the cloud (TCP 18899) and redirects it to the local server IP (`192.168.0.105`).
+2. **The Bridge:** The `inverter_bridge.py` script listens on port 18899. It accepts the connection, reads the Modbus registers, and exposes the data via a lightweight JSON API.
+3. **The Interface:** Home Assistant queries this API every second using `netcat` (nc) for zero-latency updates.
 
 ---
 
@@ -46,38 +72,81 @@ The inverter is hard-coded to communicate with a remote cloud server on TCP port
 
 You must prevent the inverter from reaching the real internet and force it to talk to your server.
 
-#### Method A: OpenWRT (Recommended)
-Add a **Port Forwarding (DNAT)** rule to your router's firewall:
-* **Name:** `Inverter Hijack`
-* **Protocol:** TCP
-* **External Zone:** LAN (We are hijacking internal LAN traffic)
-* **External Port:** 18899
-* **Internal IP:** `192.168.0.105` (Your Bridge Server IP)
-* **Internal Port:** 18899
+#### Method A: OpenWRT / pfSense / Consumer Router (Recommended)
 
-*Tip: Ensure you also have a "NAT Loopback" (Masquerade) rule active so the inverter accepts the response from your local server.*
+Add a **Port Forwarding (DNAT)** rule to your router's firewall to redirect cloud traffic to your local bridge server.
+
+**Step 1: Identify Your Inverter's Cloud Server**
+
+First, check what your inverter is trying to reach:
+- Common domain: `server.desmonitor.com`
+- Common IP: `8.218.202.213`
+- Port: `18899` (TCP)
+
+You can verify this by checking your router's connection logs or DNS query logs.
+
+**Step 2: Configure Port Forwarding**
+
+**For OpenWRT:**
+
+Add these rules to your firewall configuration:
+
 ```ini
 config redirect 'inverter_hijack'
-option name 'Inverter Hijack'
-option src 'lan'
-option proto 'tcp'
-option src_ip '192.168.0.111'
-option src_dip '8.218.202.213'
-option src_dport '18899'
-option dest_ip '192.168.0.105'
-option dest_port '18899'
-option target 'DNAT'
+	option name 'Inverter Hijack'
+	option src 'lan'
+	option proto 'tcp'
+	option src_ip '192.168.0.111'        # Your inverter's IP
+	option src_dip '8.218.202.213'       # Cloud server IP
+	option src_dport '18899'
+	option dest_ip '192.168.0.105'       # Your bridge server IP
+	option dest_port '18899'
+	option target 'DNAT'
 
 config nat 'inverter_snat'
-option name 'Inverter Loopback'
-option src 'lan'
-option proto 'tcp'
-option dest_ip '192.168.0.105'
-option dest_port '18899'
-option target 'MASQUERADE'
+	option name 'Inverter Loopback'
+	option src 'lan'
+	option proto 'tcp'
+	option dest_ip '192.168.0.105'
+	option dest_port '18899'
+	option target 'MASQUERADE'
 ```
 
-#### Method B: DNS Rewrite (Pi-hole / AdGuard Home)
+Or via LuCI web interface:
+1. Go to **Network** → **Firewall** → **Port Forwards**
+2. Click **Add**
+3. Configure:
+   - **Name:** `Inverter Hijack`
+   - **Protocol:** TCP
+   - **Source zone:** LAN
+   - **Source IP:** `192.168.0.111` (your inverter)
+   - **External IP:** `8.218.202.213` (cloud server)
+   - **External port:** `18899`
+   - **Internal IP:** `192.168.0.105` (bridge server)
+   - **Internal port:** `18899`
+
+**For pfSense/OPNsense:**
+
+1. Go to **Firewall** → **NAT** → **Port Forward**
+2. Click **Add**
+3. Configure:
+   - **Interface:** LAN
+   - **Protocol:** TCP
+   - **Source:** Single host or alias → `192.168.0.111` (inverter IP)
+   - **Destination:** Single host → `8.218.202.213` (cloud server)
+   - **Destination port:** `18899`
+   - **Redirect target IP:** `192.168.0.105` (bridge server)
+   - **Redirect target port:** `18899`
+
+**For Consumer Routers (TP-Link, Asus, Netgear, etc.):**
+
+Most consumer routers don't support source-based NAT rules. You may need to:
+1. Block the cloud server IP (`8.218.202.213`) in the router's firewall
+2. Use Method B (DNS + iptables) instead
+
+---
+
+#### Method B: DNS Rewrite (Pi-hole / AdGuard Home) + iptables
 
 **⚠️ Important:** DNS rewrite alone is NOT sufficient. DNS can only change IP addresses, not TCP ports. You must also configure iptables on your bridge server to complete the redirect.
 
@@ -85,9 +154,10 @@ option target 'MASQUERADE'
 
 Check your DNS server's query log to identify the domain:
 
-- **Pi-hole:** Go to Query Log and filter by your inverter's IP
-- **AdGuard Home:** Go to Query Log and look for requests from your inverter (e.g., `192.168.0.111`)
-- Common domains: `server.desmonitor.com`, `server.smarten-ess.com` '8.218.202.213', or similar
+- **Pi-hole:** Go to **Query Log** and filter by your inverter's IP
+- **AdGuard Home:** Go to **Query Log** and look for requests from your inverter (e.g., `192.168.0.111`)
+- Common domains: `server.desmonitor.com`, `server.smarten-ess.com`
+- Common IPs: `8.218.202.213`
 
 **Step 2: Configure DNS Rewrite**
 
@@ -95,16 +165,18 @@ Add a DNS rewrite rule pointing the cloud server to your bridge server:
 
 - **Pi-hole:** 
   - Go to **Local DNS** → **DNS Records**
-  - Add: `server.desmonitor.com` → `192.168.0.105` (your bridge IP)
+  - Add domain: `server.desmonitor.com`
+  - Add IP: `192.168.0.105` (your bridge server IP)
 
 - **AdGuard Home:**
   - Go to **Filters** → **DNS Rewrites** → **Add DNS Rewrite**
   - Domain: `server.desmonitor.com`
-  - Answer: `192.168.0.105` (your bridge IP)
+  - Answer: `192.168.0.105` (your bridge server IP)
 
 **Step 3: Enable IP Forwarding on Bridge Server**
 
 SSH into your bridge server and enable packet forwarding:
+
 ```bash
 # Enable IP forwarding temporarily
 echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -117,6 +189,7 @@ sysctl -p
 **Step 4: Configure iptables Port Redirect**
 
 Add a NAT rule to redirect incoming traffic on port 18899:
+
 ```bash
 # Create the redirect rule
 iptables -t nat -A PREROUTING -p tcp --dport 18899 -j REDIRECT --to-port 18899
@@ -129,6 +202,7 @@ iptables-save > /etc/iptables/rules.v4
 **Step 5: Make iptables Rules Persistent**
 
 Create a systemd service to restore rules after reboot:
+
 ```bash
 cat > /etc/systemd/system/iptables-restore.service << 'EOF'
 [Unit]
@@ -153,6 +227,7 @@ systemctl start iptables-restore
 **Step 6: Verify Configuration**
 
 Test that everything is set up correctly:
+
 ```bash
 # 1. Check IP forwarding is enabled
 cat /proc/sys/net/ipv4/ip_forward
@@ -183,6 +258,7 @@ systemctl status inverter-bridge
 **Note for Proxmox LXC Users:**
 
 If your bridge server runs in an LXC container, you must enable nesting to use iptables:
+
 ```bash
 # On Proxmox host, edit container config (replace CTID with your container ID)
 nano /etc/pve/lxc/CTID.conf
@@ -193,15 +269,18 @@ features: nesting=1
 # Save and restart container
 pct reboot CTID
 ```
+
 ---
 
 ### Step 2: Install the Bridge Service
 
-1.  Upload the `inverter_bridge.py` script to your server (e.g., `/root/inverter_bridge.py`).
+1. Upload the `inverter_bridge.py` script to your server (e.g., `/root/inverter_bridge.py`).
+
 ### Step 3: Run as a Service
+
 Create a systemd service to keep it running forever.
 
-File: /etc/systemd/system/inverter-bridge.service
+**File:** `/etc/systemd/system/inverter-bridge.service`
 
 ```ini
 [Unit]
@@ -218,13 +297,16 @@ WantedBy=multi-user.target
 ```
 
 Enable it:
+
 ```bash
 systemctl daemon-reload
 systemctl enable --now inverter-bridge
 ```
 
 ### Step 4: Home Assistant Configuration
-Add this to your configuration.yaml. We use nc (Netcat) instead of Python for the command line to ensure sub-1-second performance.
+
+Add this to your `configuration.yaml`. We use `nc` (Netcat) instead of Python for the command line to ensure sub-1-second performance.
+
 
 ```yaml
 input_number:
@@ -803,6 +885,7 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
