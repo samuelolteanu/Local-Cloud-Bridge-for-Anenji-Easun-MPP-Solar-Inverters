@@ -221,7 +221,8 @@ shell_command:
   set_buzzer_fault: '/bin/sh -c "echo SET_BUZZER_3 | nc -w 5 192.168.0.105 9999"'
   set_backlight_on: '/bin/sh -c "echo SET_BACKLIGHT_1 | nc -w 5 192.168.0.105 9999"'
   set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
-
+  grid_charge_on: '/bin/sh -c "echo CHARGE_ON | nc -w 5 192.168.0.105 9999"'
+  grid_charge_off: '/bin/sh -c "echo CHARGE_OFF | nc -w 5 192.168.0.105 9999"'
 
 command_line:
   - sensor:
@@ -268,9 +269,7 @@ command_line:
         - soc_back_to_grid 
         - soc_back_to_batt 
         - soc_cutoff
-
 template:
-
   - switch:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
@@ -282,14 +281,17 @@ template:
         icon: mdi:monitor-shimmer
 
       - name: "Grid Charging"
-        unique_id: grid_chargingz
-        command_timeout: 5
-        # These send commands that the script now maps to Register 316
-        command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
-        command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-        command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
-        # ON only if Priority is 2 (SNU/Solar+Utility)
-        value_template: "{{ value == '2' }}"
+        unique_id: grid_chargingz_template
+        # LOGIC: 
+        # Read 'charger_priority' from the main bridge sensor.
+        # 2 = SNU (Solar + Utility) = Grid Charging ON
+        # 3 = OSO (Solar Only) = Grid Charging OFF
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'charger_priority') | int(default=3) == 2 }}"
+        turn_on:
+          service: shell_command.grid_charge_on
+        turn_off:
+          service: shell_command.grid_charge_off
+        
         icon: mdi:flash
 
   - sensor:
@@ -652,12 +654,16 @@ Rest of the automation, add them to automations.yaml:
 
 | Register | Function | Unit / Description | Script Variable |
 | :--- | :--- | :--- | :--- |
-| **201** | Device Status | 0=Standby, 2=Line, 3=Battery, 1=Fault | `vals[1]` |
+| **101** | **Fault Code** | **Numeric Error Code (e.g. 19)** | `vals_fault[1]` |
+| **104** | **Fault Bitmask** | **Bit 3 = Error 19 (Battery Open)** | `vals_fault[4]` |
+| **105** | **Warning Bitmask** | **Bit flags for Warnings** | `vals_fault[5]` |
+| **201** | Device Status | 0=Standby, 2=Line, 3=Batt, 1/4=Fault | `vals[1]` |
 | **202** | Grid Voltage | 0.1 V | `vals[2]` |
 | **203** | Grid Frequency | 0.01 Hz | `vals[3]` |
 | **204** | Grid Power | Watts (Power drawn from Grid) | `vals[4]` |
 | **205** | Output Voltage | 0.1 V | `vals[5]` |
-| **208** | Battery Power | Signed Int (Pos = Discharge, Neg = Charge) | `vals[8]` |
+| **208** | **Batt Discharge** | **Signed Int (Net Power)** | `vals[8]` |
+| **209** | **Batt Charge** | **Watts (Charging Only)** | `vals[9]` |
 | **211** | Output Current | 0.1 A (Load Amps) | `vals[11]` |
 | **213** | **Active Output Power** | **Watts (Real House Load)** | `vals[13]` |
 | **214** | **Apparent Output** | **VA (Volt-Amps)** | `vals[14]` |
@@ -670,6 +676,7 @@ Rest of the automation, add them to automations.yaml:
 | **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB, 4=SUF | `vals_300[0]` |
 | **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `vals_300[1]` |
 | **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `vals_300[2]` |
+| **305** | **LCD Backlight** | **0=Off, 1=On** | `vals_300[4]` |
 | **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `vals_prio[0]` |
 | **333** | Max AC Charge | 0.1 A (e.g. 300 = 30A) | `vals_amps[0]` |
 | **341** | SOC Back to Grid | Percentage % | `vals_soc[0]` |
@@ -685,3 +692,4 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
