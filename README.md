@@ -8,10 +8,13 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ## 🚀 Features
 
-* **⚡ 1-Second Updates:** Replaces the slow 5-minute cloud refresh rate with instant real-time data.
-* **🔒 100% Local Control:** No data is sent to external cloud servers. The system works even when the internet is down.
-* **🏠 Home Assistant Integration:** Native sensors and switches for Grid Charging, Priority Modes, and Load monitoring.
-* **🔋 Accurate Math:** Auto-calculates values the inverter doesn't provide natively (e.g., Battery Current, correct signed Battery Flow, and true House Load).
+* **⚡ Real-Time 1-Second Updates:** Replaces the slow 5-minute cloud refresh rate with instant high-frequency polling.
+* **🔒 100% Local Control:** Acts as a transparent TCP bridge. No data is sent to external cloud servers; the system works entirely offline.
+* **🎛️ Full Device Management:** Change critical settings instantly from Home Assistant: 
+    * **Output Modes:** Switch between UTI, SOL, SBU, SUB, and SUF.
+    * **Battery Management:** Set AC Charging Amps and specific SOC Thresholds (Back-to-Grid, Back-to-Battery, Cut-off).
+    * **System Controls:** Toggle Buzzer, LCD Backlight, and AC Input Range (UPS/Appliance).
+* **🔋 Smart Calculations:** Auto-calculates values the inverter doesn't report natively, such as **Real-time Battery Current (Amps)**, **PV Current**, and **Signed Battery Power** (handling charging/discharging logic).
 * **🛠 No Hardware Mods:** Uses the inverter's existing WiFi dongle.
 
 ---
@@ -856,6 +859,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
