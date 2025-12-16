@@ -115,6 +115,21 @@ shell_command:
   set_inverter_sbu: '/bin/sh -c "echo MODE_2 | nc -w 5 192.168.0.105 9999"'
   set_inverter_sub: '/bin/sh -c "echo MODE_3 | nc -w 5 192.168.0.105 9999"'
   set_inverter_suf: '/bin/sh -c "echo MODE_4 | nc -w 5 192.168.0.105 9999"'
+  set_charger_cso: '/bin/sh -c "echo CSO_SET | nc -w 5 192.168.0.105 9999"'
+  set_charger_snu: '/bin/sh -c "echo SNU_SET | nc -w 5 192.168.0.105 9999"'
+  set_charger_oso: '/bin/sh -c "echo OSO_SET | nc -w 5 192.168.0.105 9999"'
+  set_charge_amps: '/bin/sh -c "echo SET_AMPS_{{ states("input_select.inverter_max_ac_amps") }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_grid: '/bin/sh -c "echo SET_SOC_GRID_{{ states("input_number.inverter_soc_grid") | int }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_batt: '/bin/sh -c "echo SET_SOC_BATT_{{ states("input_number.inverter_soc_batt") | int }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_cutoff: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ states("input_number.inverter_soc_cutoff") | int }} | nc -w 5 192.168.0.105 9999"'
+  set_ac_range: >
+    /bin/sh -c "echo SET_AC_RANGE_{% if is_state('input_select.inverter_ac_range', 'Appliances (APL)') %}0{% elif is_state('input_select.inverter_ac_range', 'UPS (UPS)') %}1{% else %}2{% endif %} | nc -w 5 192.168.0.105 9999"
+  set_buzzer_mute: '/bin/sh -c "echo SET_BUZZER_0 | nc -w 5 192.168.0.105 9999"'
+  set_buzzer_nd2: '/bin/sh -c "echo SET_BUZZER_1 | nc -w 5 192.168.0.105 9999"'
+  set_buzzer_nd3: '/bin/sh -c "echo SET_BUZZER_2 | nc -w 5 192.168.0.105 9999"'
+  set_buzzer_fault: '/bin/sh -c "echo SET_BUZZER_3 | nc -w 5 192.168.0.105 9999"'
+  set_backlight_on: '/bin/sh -c "echo SET_BACKLIGHT_1 | nc -w 5 192.168.0.105 9999"'
+  set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
 
 command_line:
   - sensor:
@@ -846,6 +861,7 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
