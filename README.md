@@ -78,7 +78,6 @@ Description=Inverter Modbus TCP Bridge
 After=network.target
 
 [Service]
-# Update the path below to match where you saved the script
 ExecStart=/usr/bin/python3 -u /root/inverter_bridge.py
 Restart=always
 RestartSec=5
@@ -152,9 +151,6 @@ command_line:
         
         # State Check
         command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
-        
-        # CRITICAL MISSING LINE:
-        # Tells HA: "If the number is 2, the switch is ON. Anything else is OFF."
         value_template: "{{ value == '2' }}"
         
         icon: mdi:flash
@@ -623,7 +619,8 @@ template:
 ```
 
 Inverter: Sync ALL Settings from Device (exclude it from the logs, it will flood them)
-paset it in the ui:
+Paste this as a new automation in the ui:
+
 ```yaml
 alias: "Inverter: Sync ALL Settings from Device"
 description: Updates all HA Dropdowns and Sliders when Inverter settings change externally
@@ -709,10 +706,9 @@ actions:
       value: "{{ soc_cut }}"
 mode: single
 max_exceeded: silent
-
-
 ```
-Rest of the automation, paste them in automations.yaml:
+
+Rest of the automation, add them to automations.yaml:
 ```yaml
 - id: '1765747246000'
   alias: 'Inverter: Set Priority Mode'
@@ -833,21 +829,31 @@ Rest of the automation, paste them in automations.yaml:
 
 ### 📊 Register Map
 
-| Register | Function | Description |
-| :--- | :--- | :--- |
-| **202** | Grid Voltage | 0.1 V |
-| **203** | Grid Frequency | 0.01 Hz |
-| **204** | Grid Power | Watts (Power drawn from Grid) |
-| **205** | Output Voltage | 0.1 V |
-| **208** | Battery Power | Signed Int (Positive = Discharge, Negative = Charge) |
-| **209** | PV Power | Watts |
-| **213** | PV Voltage | 0.1 V |
-| **214** | Active Load | Watts (Real House Load) |
-| **215** | Battery Voltage | 0.1 V |
-| **219** | Inverter Temp | 0.1 °C (or raw Int) |
-| **229** | Battery SOC | Percentage % |
-| **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB 4=SUF|
-| **331** | Grid Charge | 2=Solar+PV, 3=Solar Only |
+| Register | Function | Unit / Description | Script Variable |
+| :--- | :--- | :--- | :--- |
+| **201** | Device Status | 0=Standby, 2=Line, 3=Battery, 1=Fault | `vals[1]` |
+| **202** | Grid Voltage | 0.1 V | `vals[2]` |
+| **203** | Grid Frequency | 0.01 Hz | `vals[3]` |
+| **204** | Grid Power | Watts (Power drawn from Grid) | `vals[4]` |
+| **205** | Output Voltage | 0.1 V | `vals[5]` |
+| **208** | Battery Power | Signed Int (Pos = Discharge, Neg = Charge) | `vals[8]` |
+| **211** | Output Current | 0.1 A (Load Amps) | `vals[11]` |
+| **213** | **Active Output Power** | **Watts (Real House Load)** | `vals[13]` |
+| **214** | **Apparent Output** | **VA (Volt-Amps)** | `vals[14]` |
+| **215** | Battery Voltage | 0.1 V | `vals[15]` |
+| **219** | **PV Voltage** | **0.1 V** | `vals[19]` |
+| **223** | **PV Power** | **Watts** | `vals[23]` |
+| **226** | DC/Heatsink Temp | °C | `vals[26]` |
+| **227** | **Inverter Temp** | **°C** | `vals[27]` |
+| **229** | Battery SOC | Percentage % | `vals[29]` |
+| **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB, 4=SUF | `vals_300[0]` |
+| **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `vals_300[1]` |
+| **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `vals_300[2]` |
+| **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `vals_prio[0]` |
+| **333** | Max AC Charge | 0.1 A (e.g. 300 = 30A) | `vals_amps[0]` |
+| **341** | SOC Back to Grid | Percentage % | `vals_soc[0]` |
+| **342** | SOC Back to Batt | Percentage % | `vals_soc[1]` |
+| **343** | SOC Cut-off | Percentage % | `vals_soc[2]` |
 
 
 
@@ -859,6 +865,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
