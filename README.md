@@ -56,6 +56,26 @@ Add a **Port Forwarding (DNAT)** rule to your router's firewall:
 * **Internal Port:** 18899
 
 *Tip: Ensure you also have a "NAT Loopback" (Masquerade) rule active so the inverter accepts the response from your local server.*
+```ini
+config redirect 'inverter_hijack'
+option name 'Inverter Hijack'
+option src 'lan'
+option proto 'tcp'
+option src_ip '192.168.0.111'
+option src_dip '8.218.202.213'
+option src_dport '18899'
+option dest_ip '192.168.0.105'
+option dest_port '18899'
+option target 'DNAT'
+
+config nat 'inverter_snat'
+option name 'Inverter Loopback'
+option src 'lan'
+option proto 'tcp'
+option dest_ip '192.168.0.105'
+option dest_port '18899'
+option target 'MASQUERADE'
+```
 
 #### Method B: DNS Rewrite
 If you cannot edit firewall rules, use Pi-hole or AdGuard Home:
@@ -96,240 +116,7 @@ systemctl enable --now inverter-bridge
 Add this to your configuration.yaml. We use nc (Netcat) instead of Python for the command line to ensure sub-1-second performance.
 
 ```yaml
-input_select:
-  
-  inverter_buzzer_mode:
-    name: "Inverter Buzzer Mode"
-    options:
-      - "Mute (nd1)"
-      - "Source/Warn/Fault (nd2)"
-      - "Warn/Fault (nd3)"
-      - "Fault Only (nd4)"
-    icon: mdi:volume-high
-
-  inverter_ac_range:
-    name: "AC Input Range"
-    options:
-      - "Appliances (APL)"
-      - "UPS (UPS)"
-      - "Generator (GEN)"
-    icon: mdi:sine-wave
-
-  inverter_mode:
-    name: Inverter Output Source Priority
-    options:
-      - "Utility First (UTI)"
-      - "Solar First (SOL)"
-      - "SBU (Solar-Batt-Util)"
-      - "SUB (Solar-Util-Batt)"
-      - "SUF (GRID Feedback)"
-    icon: mdi:source-branch
-    
-  inverter_charger_priority:
-    name: Charger Source Priority
-    options:
-      - "Solar First (CSO)"
-      - "Solar + Utility (SNU)"
-      - "Solar Only (OSO)"
-    icon: mdi:battery-charging
-
-  inverter_max_ac_amps:
-    name: "Max AC Charge Amps"
-    options:
-      - "5"
-      - "10"
-      - "15"
-      - "20"
-      - "25"
-      - "30"
-      - "35"
-      - "40"
-      - "45"
-      - "50"
-      - "55"
-      - "60"
-      - "65"
-      - "70"
-      - "75"
-      - "80"
-    icon: mdi:current-ac
-
-#--- CONTROL LOGIC ---
-shell_command:
-  set_inverter_uti: '/bin/sh -c "echo MODE_0 | nc -w 5 192.168.0.105 9999"'
-  set_inverter_sol: '/bin/sh -c "echo MODE_1 | nc -w 5 192.168.0.105 9999"'
-  set_inverter_sbu: '/bin/sh -c "echo MODE_2 | nc -w 5 192.168.0.105 9999"'
-  set_inverter_sub: '/bin/sh -c "echo MODE_3 | nc -w 5 192.168.0.105 9999"'
-  set_inverter_suf: '/bin/sh -c "echo MODE_4 | nc -w 5 192.168.0.105 9999"'
-  set_charger_cso: '/bin/sh -c "echo CSO_SET | nc -w 5 192.168.0.105 9999"'
-  set_charger_snu: '/bin/sh -c "echo SNU_SET | nc -w 5 192.168.0.105 9999"'
-  set_charger_oso: '/bin/sh -c "echo OSO_SET | nc -w 5 192.168.0.105 9999"'
-  set_charge_amps: '/bin/sh -c "echo SET_AMPS_{{ states("input_select.inverter_max_ac_amps") }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_grid: '/bin/sh -c "echo SET_SOC_GRID_{{ states("input_number.inverter_soc_grid") | int }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_batt: '/bin/sh -c "echo SET_SOC_BATT_{{ states("input_number.inverter_soc_batt") | int }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_cutoff: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ states("input_number.inverter_soc_cutoff") | int }} | nc -w 5 192.168.0.105 9999"'
-  set_ac_range: >
-    /bin/sh -c "echo SET_AC_RANGE_{% if is_state('input_select.inverter_ac_range', 'Appliances (APL)') %}0{% elif is_state('input_select.inverter_ac_range', 'UPS (UPS)') %}1{% else %}2{% endif %} | nc -w 5 192.168.0.105 9999"
-  set_buzzer_mute: '/bin/sh -c "echo SET_BUZZER_0 | nc -w 5 192.168.0.105 9999"'
-  set_buzzer_nd2: '/bin/sh -c "echo SET_BUZZER_1 | nc -w 5 192.168.0.105 9999"'
-  set_buzzer_nd3: '/bin/sh -c "echo SET_BUZZER_2 | nc -w 5 192.168.0.105 9999"'
-  set_buzzer_fault: '/bin/sh -c "echo SET_BUZZER_3 | nc -w 5 192.168.0.105 9999"'
-  set_backlight_on: '/bin/sh -c "echo SET_BACKLIGHT_1 | nc -w 5 192.168.0.105 9999"'
-  set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
-
-command_line:
-  - switch:
-      name: "Grid Charging"
-      unique_id: grid_chargingz
-      command_timeout: 5
-      command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
-      command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-      command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
-      # ON only if Priority is 2 (SNU/Solar+Utility)
-      value_template: "{{ value == '2' }}"
-      icon: mdi:flash
-  - sensor:
-      name: "Inverter Bridge Data"
-      # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
-      command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
-      scan_interval: 1  # 2 seconds is a good balance
-      value_template: "Online"
-      json_attributes:
-        - ac_output_amp
-        - ac_load_real_watt
-        - ac_load_va
-        - grid_current
-        - buzzer_mode    
-        - backlight_status
-        - fault_code
-        - ac_input_range
-        - max_ac_amps
-        - temp_dc     
-        - temp_inv
-        - device_status   
-        - ac_load_pct  
-        - charger_priority
-        - output_mode
-        - grid_charge_setting
-        - grid_volt 
-        - batt_volt
-        - ac_load_watt
-        - ac_out_volt  
-        - ac_out_amp       
-        - pv_input_volt
-        - pv_input_watt
-        - inverter_temp
-        - batt_power_watt
-        - batt_soc
-        - batt_current
-        - pv_current
-        - grid_power_watt
-        - soc_back_to_grid   # Prg 43
-        - soc_back_to_batt   # Prg 44
-        - soc_cutoff         # Prg 45
-
-  - switch:
-        name: "Grid Charging"
-        unique_id: grid_chargingz
-        command_timeout: 5
-        # ON/OFF Commands
-        command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
-        command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-        # State Check
-        command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".grid_charge_setting"'
-        value_template: "{{ value == '2' }}"
-        icon: mdi:flash
-
-template:
-  - sensor:
-      - name: "Grid Input Power"
-        unique_id: inv_grid_power
-        unit_of_measurement: "W"
-        device_class: power
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
-
-      - name: "PV Current"
-        unique_id: inv_pv_current
-        unit_of_measurement: "A"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}"
-        
-      - name: "Battery Current"
-        unique_id: inv_batt_current
-        unit_of_measurement: "A"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
-        
-      - name: "BMS Battery Percentage"
-        unique_id: inv_batt_soc
-        unit_of_measurement: "%"
-        device_class: battery
-        state_class: measurement
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}
-
-      - name: "PV Current"
-        unique_id: inv_pv_current
-        unit_of_measurement: "A"
-        device_class: current
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}
-
-      - name: "Battery Power Flow"
-        unique_id: inv_batt_power
-        unit_of_measurement: "W"
-        device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}
-
-      - name: "Grid Voltage"
-        unique_id: inv_grid_voltage
-        unit_of_measurement: "V"
-        device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}
-
-      - name: "Output Voltage"
-        unique_id: inv_out_voltage
-        unit_of_measurement: "V"
-        device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}
-
-      - name: "House Load"
-        unique_id: inv_house_load
-        unit_of_measurement: "W"
-        device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'ac_load_watt') }}
-
-      - name: "Battery Voltage (Inverter)"
-        unique_id: inv_batt_voltage
-        unit_of_measurement: "V"
-        device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}
-
-      - name: "PV Input Voltage"
-        unique_id: inv_pv_voltage
-        unit_of_measurement: "V"
-        device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}
-
-      - name: "PV Input Power"
-        unique_id: inv_pv_power
-        unit_of_measurement: "W"
-        device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}
-
-      - name: "Inverter Temperature"
-        unique_id: inv_temp
-        unit_of_measurement: "°C"
-        device_class: temperature
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'inverter_temp') }}
-        **input_number:
-
+input_number:
   inverter_soc_grid:
     name: "Back to Grid SOC (Prg 43)"
     min: 4
@@ -439,23 +226,28 @@ shell_command:
 command_line:
   - sensor:
       name: "Inverter Bridge Data"
-      # Give it 3 seconds to fetch JSON (sensors are fast, but 3s is safer)
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
-      scan_interval: 1  # 2 seconds is a good balance
+      scan_interval: 2
       value_template: "Online"
       json_attributes:
+        # --- NEW TEXT FIELDS ---
+        - fault_msg             # The text description (e.g., "BMS Communication Fail")
+        - device_status_msg     # The text status (e.g., "Fault Mode")
+        - device_status_code    # The numeric status (0-9)
+        # -----------------------
+        - fault_code
+        - fault_bitmask         # Optional: for debugging
+        - warning_bitmask       # Optional: for debugging
         - ac_output_amp
         - ac_load_real_watt
         - ac_load_va
         - grid_current
         - buzzer_mode    
         - backlight_status
-        - fault_code
         - ac_input_range
         - max_ac_amps
         - temp_dc     
         - temp_inv
-        - device_status   
         - ac_load_pct  
         - charger_priority
         - output_mode
@@ -473,22 +265,12 @@ command_line:
         - batt_current
         - pv_current
         - grid_power_watt
-        - soc_back_to_grid   # Prg 43
-        - soc_back_to_batt   # Prg 44
-        - soc_cutoff         # Prg 45
-
-  - switch:
-      name: "Grid Charging"
-      unique_id: grid_chargingz
-      command_timeout: 5
-      command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
-      command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-      command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
-      # ON only if Priority is 2 (SNU/Solar+Utility)
-      value_template: "{{ value == '2' }}"
-      icon: mdi:flash
+        - soc_back_to_grid 
+        - soc_back_to_batt 
+        - soc_cutoff
 
 template:
+
   - switch:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
@@ -498,8 +280,28 @@ template:
         turn_off:
           service: shell_command.set_backlight_off
         icon: mdi:monitor-shimmer
-        
+
+      - name: "Grid Charging"
+        unique_id: grid_chargingz
+        command_timeout: 5
+        # These send commands that the script now maps to Register 316
+        command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
+        command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
+        command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
+        # ON only if Priority is 2 (SNU/Solar+Utility)
+        value_template: "{{ value == '2' }}"
+        icon: mdi:flash
+
   - sensor:
+      - name: "Inverter Status"
+        unique_id: inv_device_status
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'device_status_msg') }}"
+        icon: mdi:information-outline
+
+      - name: "Inverter Fault Message"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'fault_msg') }}"
+        icon: mdi:alert-circle
+
       - name: "House Load Apparent Power"
         unique_id: inv_load_apparent_power
         unit_of_measurement: "VA"
@@ -527,33 +329,7 @@ template:
           {% else %}
             1.0
           {% endif %}
-
-      - name: "Inverter Fault Status"
-        unique_id: inv_fault_text
-        icon: mdi:alert-circle-outline
-        state: >
-          {% set code = state_attr('sensor.inverter_bridge_data', 'fault_code') | int(default=0) %}
-          {% set faults = {
-            0: "Normal",
-            1: "Fan Locked (01)",
-            2: "Over Temperature (02)",
-            3: "Batt Voltage High (03)",
-            4: "Low Battery (04)",
-            5: "Output Short Circuit (05)",
-            6: "Output Voltage High (06)",
-            7: "Overload Time Out (07)",
-            8: "Bus Voltage High (08)",
-            9: "Bus Soft Start Fail (09)",
-            51: "Over Current (51)",
-            52: "Bus Voltage Low (52)",
-            53: "Inverter Soft Start Fail (53)",
-            55: "DC Voltage High (55)",
-            57: "Current Sensor Fail (57)",
-            58: "Output Voltage Low (58)"
-          } %}
-          {{ faults.get(code, "Unknown Error " + code|string) }}
           
-  - sensor:
       - name: "Inverter Temp (DC)"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'temp_dc') }}"
         unit_of_measurement: "°C"
@@ -566,32 +342,17 @@ template:
         unique_id: inv_ac_temp
         device_class: temperature
 
-  - sensor:
       - name: "Inverter Load Percentage"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_pct') }}"
         unit_of_measurement: "%"
         icon: mdi:percent
-
-      - name: "Inverter Status"
-        unique_id: inv_device_status
-        state: >
-          {% set raw_status = state_attr('sensor.inverter_bridge_data', 'device_status') | int(default=-1) %}
-          
-          {% if raw_status == 2 %} Line Mode (On-Grid)
-          {% elif raw_status == 3 %} Battery Mode (Off-Grid)
-          {% elif raw_status == 0 %} Standby / Power Off
-          {% elif raw_status == 1 %} Fault / Error
-          {% else %} Unknown ({{ raw_status }})
-          {% endif %}
-        icon: mdi:information-outline
         
-  - sensor:
       - name: "Grid Input Power"
         unique_id: inv_grid_power
         unit_of_measurement: "W"
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
-  - sensor:
+
       - name: "PV Current"
         unique_id: inv_pv_current
         unit_of_measurement: "A"
@@ -612,7 +373,6 @@ template:
           {{ (raw_amps * 0.92) | round(1) }}
         icon: mdi:current-dc
         
-  - sensor:
       - name: "BMS Battery Percentage"
         unique_id: inv_batt_soc
         unit_of_measurement: "%"
@@ -621,7 +381,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}
           
-  - sensor:
       - name: "Battery Power Flow"
         unique_id: inv_batt_power
         unit_of_measurement: "W"
@@ -629,7 +388,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}
       
-  - sensor:
       - name: "Battery Power Flow (Calibrated)"
         unique_id: inv_batt_power_calibrated
         unit_of_measurement: "W"
@@ -644,7 +402,6 @@ template:
           {% endif %}
         icon: mdi:battery-charging
 
-  - sensor:
       - name: "Grid Voltage"
         unique_id: inv_grid_voltage
         unit_of_measurement: "V"
@@ -652,7 +409,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}
 
-  - sensor:
       - name: "Output Voltage"
         unique_id: inv_out_voltage
         unit_of_measurement: "V"
@@ -660,7 +416,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}
 
-  - sensor:
       - name: "Battery Voltage (Inverter)"
         unique_id: inv_batt_voltage
         unit_of_measurement: "V"
@@ -668,7 +423,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}
 
-  - sensor:
       - name: "PV Input Voltage"
         unique_id: inv_pv_voltage
         unit_of_measurement: "V"
@@ -676,7 +430,6 @@ template:
         state: >
           {{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}
 
-  - sensor:
       - name: "PV Input Power"
         unique_id: inv_pv_power
         unit_of_measurement: "W"
@@ -932,28 +685,3 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
