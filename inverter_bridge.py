@@ -12,7 +12,9 @@ BIND_IP = '0.0.0.0'
 POLL_INTERVAL = 1.0 
 INVERTER_RATED_WATT = 6200 
 
-# --- FAULT CODE MAPPING ---
+# --- TRANSLATION MAPS ---
+
+# Map for Fault Codes
 FAULT_MAP = {
     0:  "No Fault",
     1:  "Over temperature of inverter module",
@@ -31,12 +33,33 @@ FAULT_MAP = {
     14: "Bus voltage is too low",
     15: "Inverter failed (Self-checking)",
     18: "Op current offset is too high",
-    19: "BMS Communication Fail",  # User override
+    19: "BMS Communication Fail",
     20: "DC/DC current offset is too high",
     21: "PV current offset is too high",
     22: "Output voltage is too low",
     23: "Inverter negative power",
+    51: "Over Current Inverter",
+    52: "Bus Voltage Too Low",
+    53: "Inverter Soft Start Failed",
+    55: "Over DC Voltage in AC Output",
+    56: "Battery Connection Open",
+    57: "Current Sensor Failed",
+    58: "Output Voltage Too Low",
     99: "Unknown Fault"
+}
+
+# Map for Device Status (Reg 201)
+STATUS_MAP = {
+    0: "Standby / Power Off",
+    1: "Fault Mode",           
+    2: "Line Mode (On-Grid)",  
+    3: "Battery Mode",         
+    4: "Fault Mode",       
+    5: "Power Saving Mode",
+    6: "Online Mode",
+    7: "Bypass Mode",
+    8: "Digital Bypass",
+    9: "Eco Mode"
 }
 
 # --- SHARED STATE ---
@@ -47,6 +70,8 @@ last_cmd_time = 0
 latest_data_json = {
     "fault_code": 0,
     "fault_msg": "No Fault",      
+    "device_status_code": 0,
+    "device_status_msg": "Standby",
     "fault_bitmask": 0,
     "warning_bitmask": 0,
     "charger_priority": 3,
@@ -54,7 +79,6 @@ latest_data_json = {
     "ac_input_range": 0,
     "buzzer_mode": 3,
     "backlight_status": 1,
-    "device_status": 0,
     "batt_volt": 0,
     "ac_load_va": 0,
     "ac_load_real_watt": 0,
@@ -150,7 +174,6 @@ def inverter_server():
                         vals = read_modbus_response(conn)
 
                         # 2. READ FAULT CODES (Block 100)
-                        # We read 6 registers (100-105) to cover Status, Code, and Bitmasks
                         vals_fault = None
                         if loop_counter % 2 == 0:
                             flush_buffer(conn)
@@ -195,31 +218,25 @@ def inverter_server():
                                 latest_data_json["soc_cutoff"] = vals_soc[2]
 
                         # --- UPDATE SENSORS JSON ---
-                        # v47: FIXED REGISTER MAPPING
                         if vals_fault and len(vals_fault) >= 5:
-                            # Use vals_fault[1] (Reg 101) which was correct in your original script
-                            numeric_fault = vals_fault[1] 
+                            numeric_fault = vals_fault[1] # Reg 101
                             reg_104 = vals_fault[4]       # Reg 104 (Bitmask)
                             reg_105 = vals_fault[5] if len(vals_fault) > 5 else 0
 
                             final_error = 0
                             
-                            # Priority A: Numeric Fault (from the "Good" register)
+                            # Priority A: Numeric Fault
                             if numeric_fault > 0 and numeric_fault < 100:
                                 final_error = numeric_fault
                             
-                            # Priority B: Bitmasks (Reg 104) - Needed for Error 19
-                            elif (reg_104 & 8):   # Bit 3
+                            # Priority B: Bitmasks (Reg 104)
+                            elif (reg_104 & 8):   # Bit 3 = Error 19
                                 final_error = 19
-                            elif (reg_104 & 2):   # Bit 1
+                            elif (reg_104 & 2):   # Bit 1 = Error 02
                                 final_error = 2   
-                            elif (reg_104 & 4):   # Bit 2
+                            elif (reg_104 & 4):   # Bit 2 = Error 07
                                 final_error = 7   
                             
-                            # Priority C: Generic
-                            elif (vals_fault[1] & 4) and final_error == 0: 
-                                final_error = 99 
-
                             latest_data_json["fault_code"] = final_error
                             latest_data_json["fault_bitmask"] = reg_104
                             latest_data_json["warning_bitmask"] = reg_105
@@ -228,6 +245,21 @@ def inverter_server():
                             latest_data_json["fault_msg"] = FAULT_MAP.get(final_error, f"Unknown Error {final_error}")
 
                         if vals and len(vals) >= 40:
+                            # Status decoding
+                            status_code = vals[1]
+                            status_msg = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
+
+                            # --- v50 SAFETY OVERRIDE ---
+                            # If we have a confirmed fault code, force the Status to "Fault Mode".
+                            # This overrides "Line Mode" or "Unknown(4)" if the battery is dead.
+                            if latest_data_json["fault_code"] != 0:
+                                status_msg = "Fault Mode"
+                                status_code = 1
+                            # ---------------------------
+
+                            latest_data_json["device_status_code"] = status_code
+                            latest_data_json["device_status_msg"] = status_msg
+
                             v_batt = vals[15] / 10.0
                             p_load_va = vals[14]
                             p_load_real = vals[13]
@@ -243,7 +275,6 @@ def inverter_server():
                                 batt_power = to_signed(p_batt_discharge)
 
                             latest_data_json.update({
-                                "device_status": vals[1], # Reg 201 (Kept from good script)
                                 "grid_volt":    vals[2] / 10.0,
                                 "grid_power_watt": vals[4],
                                 "ac_output_amp": vals[11] / 10.0,
