@@ -397,11 +397,8 @@ command_line:
       name: "Grid Charging"
       unique_id: grid_chargingz
       command_timeout: 5
-      # These send commands that the script now maps to Register 316
       command_on: 'echo "CHARGE_ON" | nc -w 5 192.168.0.105 9999'
       command_off: 'echo "CHARGE_OFF" | nc -w 5 192.168.0.105 9999'
-      
-      # We check the NEW "charger_priority" value from the JSON
       command_state: 'echo "JSON" | nc -w 3 192.168.0.105 9999 | jq ".charger_priority"'
       
       # ON only if Priority is 2 (SNU/Solar+Utility)
@@ -410,9 +407,6 @@ command_line:
 
 
 template:
-  
-  
-
   - switch:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
@@ -857,6 +851,7 @@ Safety: You are dealing with high-voltage equipment. Do not change write-registe
 Updates: Your inverter will no longer receive firmware updates from the cloud (which is usually a good thing).
 
 Status: The official app will show "Offline". This is normal and indicates the hijack is working.
+
 
 
 
