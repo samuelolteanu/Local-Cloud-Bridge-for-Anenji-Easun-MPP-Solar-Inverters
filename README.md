@@ -24,8 +24,9 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 1. **Compatible Inverter:** Hybrid inverter with WiFi dongle (Anenji, Easun, etc.).
    * *Verified Hardware:* ANENJI ANJ-6200W-48V
 
-2. **Network Control:** * **Method A (Best):** OpenWRT / pfSense Router (Robust).
-   * **Method B (Alternative):** Consumer Router + AdGuard Home/Pi-hole + Linux Bridge. (NOT TESTED)
+2. **Network Control (Choose One):**
+   * **Method A (Router-Based):** OpenWRT / pfSense Router.
+   * **Method B (Bridge-Based):** Linux Server acting as the Inverter's Gateway (Robust, works even if main router dies).
 
 3. **Local Server:** A Linux system (Raspberry Pi, Proxmox LXC, Docker) with a **Static IP** (e.g., `192.168.0.105`).
 
@@ -33,8 +34,10 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ## 🛠️ Installation
 
-### Step 0: The "Fast Track" 🚀
-Simply add this block to your `/etc/config/firewall` file to redirect the hardcoded Chinese cloud IP (`8.218.202.213`) to your local bridge and skip Step 1. If it's not working, go back Step 1.
+### Step 0: Choose Your Hijack Method 🚀
+
+#### Option A: The Router Method (For OpenWRT Users)
+If you have an OpenWRT router, simply add this block to `/etc/config/firewall` to redirect the cloud IP (`8.218.202.213`) to your local bridge.
 
 **Edit:** `/etc/config/firewall`
 
@@ -58,6 +61,55 @@ config nat 'inverter_snat'
     option dest_port '18899'
     option target 'MASQUERADE'
 ```
+
+### Option B: The Gateway Method (Stand-alone / High Availability)
+
+Use this if you can't modify your main router or want the bridge to work autonomously during network outages. The Bridge itself becomes the gateway for the Inverter.
+
+1. Install Dependencies (on the Bridge Server):
+
+```bash
+apt update && apt install dnsmasq iptables-persistent -y
+```
+2. Configure DHCP (/etc/dnsmasq.conf): This forces the Inverter to use the Bridge (.105) as its Gateway, while other devices use the normal router (.1).
+
+```ini
+# Core Settings
+interface=eth0
+bind-interfaces
+port=0 # Disables DNS to avoid conflicts
+
+# DHCP Range
+dhcp-range=192.168.0.100,192.168.0.240,12h
+
+# Global Options (Standard Devices -> Main Router)
+dhcp-option=6,8.8.8.8              # DNS
+dhcp-option=3,192.168.0.1          # Standard Gateway
+
+# Inverter Specific (Reservation & Hijack)
+# Replace AA:BB:CC... with your Inverter Dongle MAC
+dhcp-host=AA:BB:CC:DD:EE:FF,192.168.0.111,Solar-Inverter,set:solar_inverter
+
+# Send the Bridge IP (.105) as Gateway ONLY to the tagged inverter
+dhcp-option=tag:solar_inverter,3,192.168.0.105
+````
+3. Configure Routing & Firewall: Run these commands to enable traffic forwarding and hijack the solar port locally.
+
+```bash
+# Enable Kernel Routing
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-inverter-routing.conf
+sysctl -p /etc/sysctl.d/99-inverter-routing.conf
+
+# 1. Redirect Solar Traffic (18899) to the local Python process
+iptables -t nat -A PREROUTING -s 192.168.0.111 -p tcp --dport 18899 -j REDIRECT --to-port 18899
+
+# 2. Masquerade outbound traffic (Allows Inverter -> Bridge -> Internet)
+iptables -t nat -A POSTROUTING -s 192.168.0.111 -o eth0 -j MASQUERADE
+
+# 3. Save rules permanently
+netfilter-persistent save
+```
+
 
 ### Step 1: Identify Your Cloud Target 🕵️
 
@@ -113,6 +165,7 @@ We use a **"Catch-All" Port Redirect**. This works even if the inverter uses a h
 * **Action:** `MASQUERADE`
 
 ---
+
 
 ### Step 3: Install the Bridge Service
 
@@ -774,6 +827,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
