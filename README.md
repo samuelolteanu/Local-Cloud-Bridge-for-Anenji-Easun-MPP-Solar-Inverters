@@ -309,33 +309,8 @@ Add this to your `configuration.yaml`. We use `nc` (Netcat) instead of Python fo
 
 
 ```yaml
-input_number:
-  inverter_soc_grid:
-    name: "Back to Grid SOC (Prg 43)"
-    min: 4
-    max: 50
-    step: 1
-    unit_of_measurement: "%"
-    icon: mdi:battery-arrow-down
 
-  inverter_soc_batt:
-    name: "Back to Battery SOC (Prg 44)"
-    min: 60  
-    max: 100
-    step: 1
-    unit_of_measurement: "%"
-    icon: mdi:battery-arrow-up
-
-  inverter_soc_cutoff:
-    name: "Cut-off SOC (Prg 45)"
-    min: 3
-    max: 19
-    step: 1
-    unit_of_measurement: "%"
-    icon: mdi:battery-alert
-    
 input_select:
-  
   inverter_buzzer_mode:
     name: "Inverter Buzzer Mode"
     options:
@@ -403,9 +378,9 @@ shell_command:
   set_charger_snu: '/bin/sh -c "echo SNU_SET | nc -w 5 192.168.0.105 9999"'
   set_charger_oso: '/bin/sh -c "echo OSO_SET | nc -w 5 192.168.0.105 9999"'
   set_charge_amps: '/bin/sh -c "echo SET_AMPS_{{ states("input_select.inverter_max_ac_amps") }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_grid: '/bin/sh -c "echo SET_SOC_GRID_{{ states("input_number.inverter_soc_grid") | int }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_batt: '/bin/sh -c "echo SET_SOC_BATT_{{ states("input_number.inverter_soc_batt") | int }} | nc -w 5 192.168.0.105 9999"'
-  set_soc_cutoff: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ states("input_number.inverter_soc_cutoff") | int }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_grid_direct: '/bin/sh -c "echo SET_SOC_GRID_{{ val }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_batt_direct: '/bin/sh -c "echo SET_SOC_BATT_{{ val }} | nc -w 5 192.168.0.105 9999"'
+  set_soc_cutoff_direct: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ val }} | nc -w 5 192.168.0.105 9999"'
   set_ac_range: >
     /bin/sh -c "echo SET_AC_RANGE_{% if is_state('input_select.inverter_ac_range', 'Appliances (APL)') %}0{% elif is_state('input_select.inverter_ac_range', 'UPS (UPS)') %}1{% else %}2{% endif %} | nc -w 5 192.168.0.105 9999"
   set_buzzer_mute: '/bin/sh -c "echo SET_BUZZER_0 | nc -w 5 192.168.0.105 9999"'
@@ -416,41 +391,53 @@ shell_command:
   set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.105 9999"'
   grid_charge_on: '/bin/sh -c "echo CHARGE_ON | nc -w 5 192.168.0.105 9999"'
   grid_charge_off: '/bin/sh -c "echo CHARGE_OFF | nc -w 5 192.168.0.105 9999"'
-
+  set_return_default_on: '/bin/sh -c "echo SET_RETURN_DEFAULT_1 | nc -w 5 192.168.0.105 9999"'
+  set_return_default_off: '/bin/sh -c "echo SET_RETURN_DEFAULT_0 | nc -w 5 192.168.0.105 9999"'
+  
+# --- SENSOR CONFIGURATION ---
 command_line:
   - sensor:
       name: "Inverter Bridge Data"
+      # Using -w 3 ensures it fails/timeouts if bridge is down
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 2
-      value_template: "Online"
+      # Only mark as "Online" if we actually got valid JSON data
+      value_template: >
+        {% if value_json is defined %}
+          Online
+        {% else %}
+          Offline
+        {% endif %}
+      # If the command fails (exit code 1), the sensor becomes Unavailable automatically.
       json_attributes:
-        # --- NEW TEXT FIELDS ---
-        - fault_msg             # The text description (e.g., "BMS Communication Fail")
-        - device_status_msg     # The text status (e.g., "Fault Mode")
-        - device_status_code    # The numeric status (0-9)
-        # -----------------------
+        - fault_msg
+        - warning_code
+        - warning_msg
+        - device_status_msg
+        - device_status_code
         - fault_code
-        - fault_bitmask         # Optional: for debugging
-        - warning_bitmask       # Optional: for debugging
+        - fault_bitmask
+        - warning_bitmask
+        - return_to_default
         - ac_output_amp
         - ac_load_real_watt
         - ac_load_va
         - grid_current
-        - buzzer_mode    
+        - buzzer_mode
         - backlight_status
         - ac_input_range
         - max_ac_amps
-        - temp_dc     
+        - temp_dc
         - temp_inv
-        - ac_load_pct  
+        - ac_load_pct
         - charger_priority
         - output_mode
         - grid_charge_setting
         - grid_volt 
         - batt_volt
         - ac_load_watt
-        - ac_out_volt  
-        - ac_out_amp       
+        - ac_out_volt
+        - ac_out_amp
         - pv_input_volt
         - pv_input_watt
         - inverter_temp
@@ -462,11 +449,60 @@ command_line:
         - soc_back_to_grid 
         - soc_back_to_batt 
         - soc_cutoff
+        - grid_freq
+
 template:
+  - number:
+      - name: "Back to Grid SOC (Prg 43)"
+        unique_id: num_soc_grid
+        min: 4
+        max: 50
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-arrow-down
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          # Calls the specific command
+          service: shell_command.set_soc_grid_direct
+          data:
+            # Passes the slider value into the 'val' placeholder we created above
+            val: "{{ value | int }}"
+
+      - name: "Back to Battery SOC (Prg 44)"
+        unique_id: num_soc_batt
+        min: 60
+        max: 100
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-arrow-up
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_soc_batt_direct
+          data:
+            val: "{{ value | int }}"
+
+      - name: "Cut-off SOC (Prg 45)"
+        unique_id: num_soc_cutoff
+        min: 3
+        max: 30
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_cutoff') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_soc_cutoff_direct
+          data:
+            val: "{{ value | int }}"
+            
   - switch:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
         state: "{{ state_attr('sensor.inverter_bridge_data', 'backlight_status') == 1 }}"
+        # This switch becomes Unavailable if the bridge is down
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.set_backlight_on
         turn_off:
@@ -475,47 +511,69 @@ template:
 
       - name: "Grid Charging"
         unique_id: grid_chargingz_template
-        # LOGIC: 
-        # Read 'charger_priority' from the main bridge sensor.
-        # 2 = SNU (Solar + Utility) = Grid Charging ON
-        # 3 = OSO (Solar Only) = Grid Charging OFF
         state: "{{ state_attr('sensor.inverter_bridge_data', 'charger_priority') | int(default=3) == 2 }}"
+        # This switch becomes Unavailable if the bridge is down
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.grid_charge_on
         turn_off:
           service: shell_command.grid_charge_off
-        
         icon: mdi:flash
+      
+      - name: "Inverter Return to Default Screen"
+        unique_id: inverter_return_default_switch
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'return_to_default') == 1 }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        turn_on:
+          service: shell_command.set_return_default_on
+        turn_off:
+          service: shell_command.set_return_default_off
+        icon: mdi:arrow-u-left-top
 
   - sensor:
+      # 1. Device Status (e.g., "Line Mode", "Battery Mode", "Warning Mode")
       - name: "Inverter Status"
         unique_id: inv_device_status
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'device_status_msg') }}"
         icon: mdi:information-outline
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'device_status_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
+      # 2. Fault/Error Message (e.g., "No Fault", "Inverter current offset is too high")
+      # This is for CRITICAL errors that stop the machine.
       - name: "Inverter Fault Message"
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'fault_msg') }}"
+        unique_id: inv_fault_msg
         icon: mdi:alert-circle
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'fault_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      # 3. Warning Message (e.g., "No Warning", "BMS Communication Fail")
+      # This is for ALERTS where the machine keeps running (Status 4).
+      - name: "Inverter Warning Message"
+        unique_id: inv_warning_msg
+        icon: mdi:alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'warning_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "House Load Apparent Power"
         unique_id: inv_load_apparent_power
         unit_of_measurement: "VA"
         device_class: apparent_power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'ac_load_va') | float(0) }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_va') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         icon: mdi:flash-outline  
 
       - name: "House Load Power"
         unique_id: inv_house_load_watts
         unit_of_measurement: "W"
         device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') | float(0) }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Output Power Factor"
         unique_id: inv_output_pf
         unit_of_measurement: "PF"    
         state_class: measurement
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
           {% set real = state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') | float(0) %}
           {% set va = state_attr('sensor.inverter_bridge_data', 'ac_load_va') | float(0) %}
@@ -530,41 +588,47 @@ template:
         unit_of_measurement: "°C"
         unique_id: inv_dc_temp
         device_class: temperature
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Inverter Temp (AC)"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'temp_inv') }}"
         unit_of_measurement: "°C"
         unique_id: inv_ac_temp
         device_class: temperature
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Inverter Load Percentage"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_pct') }}"
         unit_of_measurement: "%"
         icon: mdi:percent
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         
       - name: "Grid Input Power"
         unique_id: inv_grid_power
         unit_of_measurement: "W"
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "PV Current"
         unique_id: inv_pv_current
         unit_of_measurement: "A"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         
       - name: "Battery Current"
         unique_id: inv_batt_current
         unit_of_measurement: "A"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Battery Current (Calibrated)"
         unique_id: inv_batt_current_calibrated
         unit_of_measurement: "A"
         device_class: current
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
           {% set raw_amps = state_attr('sensor.inverter_bridge_data', 'batt_current') | float(0) %}
-          {# Calibrate only if charging, or always if you prefer. 0.92 = 69A/75A #}
           {{ (raw_amps * 0.92) | round(1) }}
         icon: mdi:current-dc
         
@@ -573,23 +637,23 @@ template:
         unit_of_measurement: "%"
         device_class: battery
         state_class: measurement
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
           
       - name: "Battery Power Flow"
         unique_id: inv_batt_power
         unit_of_measurement: "W"
         device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
       
       - name: "Battery Power Flow (Calibrated)"
         unique_id: inv_batt_power_calibrated
         unit_of_measurement: "W"
         device_class: power
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
           {% set raw = state_attr('sensor.inverter_bridge_data', 'batt_power_watt') | float(0) %}
-          {# Only calibrate charging (negative values) because discharge efficiency is different #}
           {% if raw < 0 %}
             {{ (raw * 0.86) | round(0) }}
           {% else %}
@@ -601,171 +665,83 @@ template:
         unique_id: inv_grid_voltage
         unit_of_measurement: "V"
         device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Grid Frequency"
+        unique_id: inv_grid_freq
+        unit_of_measurement: "Hz"
+        device_class: frequency
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_freq') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Output Voltage"
         unique_id: inv_out_voltage
         unit_of_measurement: "V"
         device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Battery Voltage (Inverter)"
         unique_id: inv_batt_voltage
         unit_of_measurement: "V"
         device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "PV Input Voltage"
         unique_id: inv_pv_voltage
         unit_of_measurement: "V"
         device_class: voltage
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "PV Input Power"
         unique_id: inv_pv_power
         unit_of_measurement: "W"
         device_class: power
-        state: >
-          {{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
 ```
 
-Automation: "Inverter: Sync ALL Settings from Device" (exclude it from the logbook or database, it will flood them)
-Paste this as a new automation in the ui:
+automations.yaml:
 
-```yaml
-alias: "Inverter: Sync ALL Settings from Device"
-description: Updates all HA Dropdowns and Sliders when Inverter settings change externally
-triggers:
-  - entity_id: sensor.inverter_bridge_data
-    trigger: state
-actions:
-  - variables:
-      mode: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'output_mode') |
-        int(default=0) }}
-      range: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'ac_input_range') |
-        int(default=0) }}
-      prio: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'charger_priority') |
-        int(default=3) }}
-      buzzer: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'buzzer_mode') |
-        int(default=3) }}
-      amps: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'max_ac_amps') |
-        int(default=30) }}
-      soc_grid: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') |
-        int(default=50) }}
-      soc_batt: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') |
-        int(default=100) }}
-      soc_cut: >-
-        {{ state_attr('sensor.inverter_bridge_data', 'soc_cutoff') |
-        int(default=20) }}
-  - action: input_select.select_option
-    target:
-      entity_id: input_select.inverter_mode
-    data:
-      option: >
-        {% if mode == 0 %} Utility First (UTI) {% elif mode == 1 %} Solar First
-        (SOL) {% elif mode == 2 %} SBU (Solar-Batt-Util) {% elif mode == 3 %}
-        SUB (Solar-Util-Batt) {% elif mode == 4 %} SUF (GRID Feedback) {% endif
-        %}
-  - action: input_select.select_option
-    target:
-      entity_id: input_select.inverter_ac_range
-    data:
-      option: >
-        {% if range == 0 %} Appliances (APL) {% elif range == 1 %} UPS (UPS) {%
-        elif range == 2 %} Generator (GEN) {% endif %}
-  - action: input_select.select_option
-    target:
-      entity_id: input_select.inverter_charger_priority
-    data:
-      option: >
-        {% if prio == 1 %} Solar First (CSO) {% elif prio == 2 %} Solar +
-        Utility (SNU) {% else %} Solar Only (OSO) {% endif %}
-  - action: input_select.select_option
-    target:
-      entity_id: input_select.inverter_buzzer_mode
-    data:
-      option: >
-        {% if buzzer == 0 %} Mute (nd1) {% elif buzzer == 1 %} Source/Warn/Fault
-        (nd2) {% elif buzzer == 2 %} Warn/Fault (nd3) {% else %} Fault Only
-        (nd4) {% endif %}
-  - action: input_select.select_option
-    target:
-      entity_id: input_select.inverter_max_ac_amps
-    data:
-      option: "{{ amps | string }}"
-  - action: input_number.set_value
-    target:
-      entity_id: input_number.inverter_soc_grid
-    data:
-      value: "{{ soc_grid }}"
-  - action: input_number.set_value
-    target:
-      entity_id: input_number.inverter_soc_batt
-    data:
-      value: "{{ soc_batt }}"
-  - action: input_number.set_value
-    target:
-      entity_id: input_number.inverter_soc_cutoff
-    data:
-      value: "{{ soc_cut }}"
-mode: single
-max_exceeded: silent
-```
-
-Rest of the automation, add them to automations.yaml:
 ```yaml
 - id: '1765747246000'
   alias: 'Inverter: Set Priority Mode'
-  description: Sends command to inverter when Dropdown changes in UI
   triggers:
   - entity_id: input_select.inverter_mode
     trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
   actions:
   - choose:
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.to_state.state == ''Utility First (UTI)'' }}'
+    - conditions: '{{ trigger.to_state.state == ''Utility First (UTI)'' }}'
       sequence:
       - action: shell_command.set_inverter_uti
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.to_state.state == ''Solar First (SOL)'' }}'
+    - conditions: '{{ trigger.to_state.state == ''Solar First (SOL)'' }}'
       sequence:
       - action: shell_command.set_inverter_sol
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.to_state.state == ''SBU (Solar-Batt-Util)'' }}'
+    - conditions: '{{ trigger.to_state.state == ''SBU (Solar-Batt-Util)'' }}'
       sequence:
       - action: shell_command.set_inverter_sbu
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.to_state.state == ''SUB (Solar-Util-Batt)'' }}'
+    - conditions: '{{ trigger.to_state.state == ''SUB (Solar-Util-Batt)'' }}'
       sequence:
       - action: shell_command.set_inverter_sub
-    - conditions:
-      - condition: template
-        value_template: '{{ trigger.to_state.state == ''SUF (GRID Feedback)'' }}'
+    - conditions: '{{ trigger.to_state.state == ''SUF (GRID Feedback)'' }}'
       sequence:
       - action: shell_command.set_inverter_suf
   mode: restart
 - id: '1765777872842'
   alias: 'Inverter: Set Charger Priority'
-  description: ''
   triggers:
   - entity_id: input_select.inverter_charger_priority
     trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
   actions:
   - choose:
     - conditions: '{{ trigger.to_state.state == ''Solar First (CSO)'' }}'
@@ -780,51 +756,33 @@ Rest of the automation, add them to automations.yaml:
   mode: single
 - id: '1765815798845'
   alias: 'Inverter: Set Max AC Amps'
-  description: ''
   triggers:
   - entity_id: input_select.inverter_max_ac_amps
     trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
   actions:
   - action: shell_command.set_charge_amps
   mode: single
-- id: '1765820126314'
-  alias: 'Inverter: Set Back to Grid'
-  description: ''
-  triggers:
-  - entity_id: input_number.inverter_soc_grid
-    trigger: state
-  actions:
-  - action: shell_command.set_soc_grid
-- id: '1765820142770'
-  alias: 'Inverter: Set Back to Battery'
-  description: ''
-  triggers:
-  - entity_id: input_number.inverter_soc_batt
-    trigger: state
-  actions:
-  - action: shell_command.set_soc_batt
-- id: '1765820168559'
-  alias: 'Inverter: Set Cut-off'
-  description: ''
-  triggers:
-  - entity_id: input_number.inverter_soc_cutoff
-    trigger: state
-  actions:
-  - action: shell_command.set_soc_cutoff
 - id: '1765823166092'
   alias: 'Inverter: Set AC Range'
-  description: ''
   triggers:
   - entity_id: input_select.inverter_ac_range
     trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
   actions:
   - action: shell_command.set_ac_range
 - id: '1765863406672'
   alias: 'Inverter: Set Buzzer Mode'
-  description: ''
   triggers:
   - entity_id: input_select.inverter_buzzer_mode
     trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
   actions:
   - choose:
     - conditions: '{{ trigger.to_state.state == ''Mute (nd1)'' }}'
@@ -839,6 +797,75 @@ Rest of the automation, add them to automations.yaml:
     - conditions: '{{ trigger.to_state.state == ''Fault Only (nd4)'' }}'
       sequence:
         action: shell_command.set_buzzer_fault
+- id: '1765864027241'
+  alias: 'Inverter: Sync ALL Settings from Device'
+  triggers:
+  - entity_id: sensor.inverter_bridge_data
+    trigger: state
+  actions:
+  - variables:
+      mode_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''output_mode'') }}'
+      range_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''ac_input_range'')
+        }}'
+      prio_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''charger_priority'')
+        }}'
+      buzzer_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''buzzer_mode'')
+        }}'
+      amps_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''max_ac_amps'') }}'
+      soc_grid_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_back_to_grid'')
+        }}'
+      soc_batt_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_back_to_batt'')
+        }}'
+      soc_cut_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_cutoff'')
+        }}'
+  - choose:
+    - conditions: '{{ mode_raw is not none }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_mode
+        data:
+          option: '{% set m = mode_raw | int %} {% if m == 0 %}Utility First (UTI)
+            {% elif m == 1 %}Solar First (SOL) {% elif m == 2 %}SBU (Solar-Batt-Util)
+            {% elif m == 3 %}SUB (Solar-Util-Batt) {% elif m == 4 %}SUF (GRID Feedback)
+            {% else %}{{ states(''input_select.inverter_mode'') }}{% endif %}
+
+            '
+  - choose:
+    - conditions: '{{ range_raw is not none }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_ac_range
+        data:
+          option: '{% set r = range_raw | int %} {% if r == 0 %}Appliances (APL) {%
+            elif r == 1 %}UPS (UPS) {% elif r == 2 %}Generator (GEN) {% else %}{{
+            states(''input_select.inverter_ac_range'') }}{% endif %}
+
+            '
+  - choose:
+    - conditions: '{{ prio_raw is not none }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_charger_priority
+        data:
+          option: '{% set p = prio_raw | int %} {% if p == 1 %}Solar First (CSO) {%
+            elif p == 2 %}Solar + Utility (SNU) {% elif p == 3 %}Solar Only (OSO)
+            {% else %}{{ states(''input_select.inverter_charger_priority'') }}{% endif
+            %}
+
+            '
+  - choose:
+    - conditions: '{{ amps_raw is not none and amps_raw | int > 0 }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_max_ac_amps
+        data:
+          option: '{{ amps_raw | int | string }}'
+  mode: single
+  max_exceeded: silent
 
 ```
 
@@ -848,9 +875,9 @@ Rest of the automation, add them to automations.yaml:
 | Register | Function | Unit / Description | Script Variable |
 | :--- | :--- | :--- | :--- |
 | **101** | **Fault Code** | **Numeric Error Code (e.g. 19)** | `vals_fault[1]` |
-| **104** | **Fault Bitmask** | **Bit 3 = Error 19 (Battery Open)** | `vals_fault[4]` |
-| **105** | **Warning Bitmask** | **Bit flags for Warnings** | `vals_fault[5]` |
-| **201** | Device Status | 0=Standby, 2=Line, 3=Batt, 1/4=Fault | `vals[1]` |
+| **104** | **Warning Bitmask 1** | **Primary Warnings**<br>Bit 6 = Battery Open (bP)<br>Bit 8 = Low Battery (04) | `vals_fault[4]` |
+| **105** | **Warning Bitmask 2** | **Critical / Hidden Warnings**<br>Bit 0 = System Fault (01)<br>Bit 6 = Internal Batt Relay Open (64)<br>Bit 12 = Battery Cutoff / Recovery (4096) | `vals_fault[5]` |
+| **201** | Device Status | 0=Standby, 2=Line, 3=Batt, 1=Fault | `vals[1]` |
 | **202** | Grid Voltage | 0.1 V | `vals[2]` |
 | **203** | Grid Frequency | 0.01 Hz | `vals[3]` |
 | **204** | Grid Power | Watts (Power drawn from Grid) | `vals[4]` |
@@ -870,6 +897,7 @@ Rest of the automation, add them to automations.yaml:
 | **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `vals_300[1]` |
 | **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `vals_300[2]` |
 | **305** | **LCD Backlight** | **0=Off, 1=On** | `vals_300[4]` |
+| **306** | **Auto Return Screen** | **0=Disabled, 1=Enabled (LCD Set 19)** | `vals_306[0]` |
 | **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `vals_prio[0]` |
 | **333** | Max AC Charge | 0.1 A (e.g. 300 = 30A) | `vals_amps[0]` |
 | **341** | SOC Back to Grid | Percentage % | `vals_soc[0]` |
@@ -885,6 +913,7 @@ Rest of the automation, add them to automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
