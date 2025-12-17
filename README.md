@@ -21,28 +21,44 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ## 📋 Prerequisites
 
-1. **Compatible Inverter:** Hybrid inverter with WiFi dongle (Anenji, Easun, etc.) connecting to Chinese cloud servers.
+1. **Compatible Inverter:** Hybrid inverter with WiFi dongle (Anenji, Easun, etc.).
    * *Verified Hardware:* ANENJI ANJ-6200W-48V
 
-2. **Network Control:** You need a way to intercept the traffic.
-   * **Method A (Best - OpenWRT/pfSense):** Uses a "Catch-All" Port Redirect rule. Robust and handles hardcoded IPs.
-   * **Method B (Alternative - Pi-hole/AdGuard):** Uses DNS Spoofing. Required if you have a standard ISP/Consumer router that doesn't support advanced NAT rules.
+2. **Network Control:** * **Method A (Best):** OpenWRT / pfSense Router (Robust).
+   * **Method B (Alternative):** Consumer Router + AdGuard Home/Pi-hole + Linux Bridge.
 
 3. **Local Server:** A Linux system (Raspberry Pi, Proxmox LXC, Docker) with a **Static IP** (e.g., `192.168.0.105`).
 
 ---
 
-## ⚙️ Architecture
-
-The inverter is hard-coded to communicate with a remote cloud server on TCP port **18899** (usually). We perform a "Man-in-the-Middle" attack:
-
-1. **The Hijack:** The router/DNS redirects traffic destined for the cloud to your local server IP (`192.168.0.105`).
-2. **The Bridge:** The `inverter_bridge.py` script listens on the target port. It accepts the connection, reads Modbus registers, and exposes data via JSON.
-3. **The Interface:** Home Assistant queries this API every second for zero-latency updates.
-
----
-
 ## 🛠️ Installation
+
+### Step 0: The OpenWRT "Fast Track" 🚀
+
+**Do you have an OpenWRT router?** If yes, simply add this block to your `/etc/config/firewall` file to redirect the hardcoded Chinese cloud IP (`8.218.202.213`) to your local bridge.
+
+**Edit:** `/etc/config/firewall`
+
+```ini
+config redirect 'inverter_hijack'
+    option name 'Inverter Hijack'
+    option src 'lan'
+    option proto 'tcp'
+    option src_ip '192.168.0.111'     # Your Inverter IP
+    option src_dip '8.218.202.213'    # The common Cloud IP (Verified on Anenji)
+    option src_dport '18899'          # The common Cloud Port
+    option dest_ip '192.168.0.105'    # Your Bridge Server IP
+    option dest_port '18899'
+    option target 'DNAT'
+
+config nat 'inverter_snat'
+    option name 'Inverter Loopback'
+    option src 'lan'
+    option proto 'tcp'
+    option dest_ip '192.168.0.105'
+    option dest_port '18899'
+    option target 'MASQUERADE'
+```
 
 ### Step 1: Identify Your Cloud Target 🕵️
 
@@ -81,27 +97,18 @@ Go to **Network** -> **Firewall** -> **Port Forwards** and click **Add**:
 * **Internal IP:** `192.168.0.105` (Your Bridge Server)
 * **Internal Port:** `18899`
 
-**Why this is better:** It grabs *anything* the inverter sends on port 18899, regardless of where the inverter *thinks* it is going.
+CRITICAL: DHCP Configuration The WiFi dongle does not have DNS settings. It will only use the DNS provided by your network's DHCP server. You must ensure the inverter uses your AdGuard/Pi-hole IP (192.168.0.105) as its DNS.
+    Option 1 (If your Router allows it): Go to your Router's DHCP Settings and set "Primary DNS" to 192.168.0.105.
+    Option 2 (Most reliable): Disable DHCP on your Router completely. Enable DHCP Server inside AdGuard Home / Pi-hole.
 
-#### Method B: DNS Rewrite (Consumer Routers)
-Use this if you have a TP-Link/Asus/ISP router and a Pi-hole/AdGuard.
+1. Configure DNS Rewrite:
+    In Pi-hole/AdGuard, create a Local DNS Record.
+    Domain: server.desmonitor.com (From Step 1).
+    IP Address: 192.168.0.105 (Your Bridge Server).
 
-**1. Configure DNS Rewrite:**
-* In Pi-hole/AdGuard, create a **Local DNS Record**.
-* **Domain:** `server.desmonitor.com` (From Step 1).
-* **IP Address:** `192.168.0.105` (Your Bridge Server).
-
-**2. Block Hardcoded IPs (Crucial):**
-* In your Router's "Parental Controls" or "Access Control", **BLOCK** the Inverter's IP (`192.168.0.111`) from accessing the Internet completely.
-* **Why?** Many inverters try a hardcoded IP (e.g., `8.218.202.213`) if DNS fails or just for good measure. Blocking Internet access forces the connection to fail, often making the inverter retry via DNS (which you control).
-
-**3. Configure iptables (On Bridge Server):**
-* *Only needed if the Inverter target port != 18899.*
-* If Inverter targets Port 80, but script listens on 18899:
-    ```bash
-    iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 18899
-    ```
-
+2. Block Hardcoded IPs:
+    In your Router's "Parental Controls" or "Access Control", BLOCK the Inverter IP (192.168.0.111) from accessing the Internet.
+    This forces the dongle to fail back to DNS (which you control) if it tries to use a hardcoded IP.
 ---
 
 ### Step 3: Install the Bridge Service
@@ -743,6 +750,7 @@ automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
