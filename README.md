@@ -25,7 +25,7 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
    * *Verified Hardware:* ANENJI ANJ-6200W-48V
 
 2. **Network Control:** * **Method A (Best):** OpenWRT / pfSense Router (Robust).
-   * **Method B (Alternative):** Consumer Router + AdGuard Home/Pi-hole + Linux Bridge.
+   * **Method B (Alternative):** Consumer Router + AdGuard Home/Pi-hole + Linux Bridge. (NOT TESTED)
 
 3. **Local Server:** A Linux system (Raspberry Pi, Proxmox LXC, Docker) with a **Static IP** (e.g., `192.168.0.105`).
 
@@ -81,7 +81,6 @@ Since you have a Linux server on the same network, use it to sniff the traffic.
 
 ### Step 2: Configure Network Hijack
 
-#### Method A: OpenWRT / pfSense (Recommended)
 We use a **"Catch-All" Port Redirect**. This works even if the inverter uses a hardcoded IP or changes domains.
 
 **OpenWRT Configuration:**
@@ -97,18 +96,6 @@ Go to **Network** -> **Firewall** -> **Port Forwards** and click **Add**:
 * **Internal IP:** `192.168.0.105` (Your Bridge Server)
 * **Internal Port:** `18899`
 
-CRITICAL: DHCP Configuration The WiFi dongle does not have DNS settings. It will only use the DNS provided by your network's DHCP server. You must ensure the inverter uses your AdGuard/Pi-hole IP (192.168.0.105) as its DNS.
-    Option 1 (If your Router allows it): Go to your Router's DHCP Settings and set "Primary DNS" to 192.168.0.105.
-    Option 2 (Most reliable): Disable DHCP on your Router completely. Enable DHCP Server inside AdGuard Home / Pi-hole.
-
-1. Configure DNS Rewrite:
-    In Pi-hole/AdGuard, create a Local DNS Record.
-    Domain: server.desmonitor.com (From Step 1).
-    IP Address: 192.168.0.105 (Your Bridge Server).
-
-2. Block Hardcoded IPs:
-    In your Router's "Parental Controls" or "Access Control", BLOCK the Inverter IP (192.168.0.111) from accessing the Internet.
-    This forces the dongle to fail back to DNS (which you control) if it tries to use a hardcoded IP.
 ---
 
 ### Step 3: Install the Bridge Service
@@ -749,6 +736,7 @@ automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
