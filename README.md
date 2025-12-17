@@ -707,8 +707,28 @@ automations.yaml:
   mode: single
   max_exceeded: silent
 
+
+  
+```
+Useful commands:
+
+```bash
+systemctl stop inverter-bridge.service
+nano /etc/systemd/system/inverter-bridge.service
+systemctl daemon-reload
+systemctl start inverter-bridge
+systemctl status inverter-bridge
 ```
 
+**Isolate HA issues:**
+This command prints all data on any terminal on local network:
+
+```terminal
+echo "JSON" | nc -w 1 <bridge ip> 9999
+```
+```json
+{"fault_code": 0, "fault_msg": "No Fault", "warning_code": 0, "warning_msg": "No Warning", "device_status_code": 3, "device_status_msg": "Battery Mode", "fault_bitmask": 0, "warning_bitmask": 65, "charger_priority": 3, "output_mode": 3, "ac_input_range": 1, "buzzer_mode": 0, "backlight_status": 1, "return_to_default": 0, "batt_volt": 52.6, "ac_load_va": 1194, "ac_load_real_watt": 855, "ac_load_pct": 19.3, "batt_power_watt": 936, "grid_power_watt": 0, "ac_output_amp": 5.2, "pv_input_watt": 0, "pv_input_volt": 135.3, "pv_current": 0.0, "batt_soc": 59, "temp_dc": 26, "temp_inv": 30, "max_total_amps": 101.0, "max_ac_amps": 70.0, "batt_current": 17.8, "soc_back_to_grid": 10, "soc_back_to_batt": 60, "soc_cutoff": 3, "grid_volt": 0.0, "grid_freq": 0.0, "ac_out_volt": 229.8}
+```
 
 ### 📊 Register Map
 
@@ -753,6 +773,7 @@ automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
