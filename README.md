@@ -71,11 +71,18 @@ Since you have a Linux server on the same network, use it to sniff the traffic.
     # Replace IPs with: [Inverter IP] [Router IP]
     arpspoof -i eth0 -t 192.168.0.111 192.168.0.1
     ```
+
+    example response:
+
+    ```bash
+    14:26:59.963092 IP 192.168.0.111.51118 > 8.218.202.213.18899: Flags [S], seq 4912356, win 4380, options [mss 1460], length 0
+    ```
+    
     *(Leave running in Terminal 1)*
-3.  **Watch DNS queries:** In Terminal 2: `tcpdump -i eth0`
+2.  **Watch DNS queries:** In Terminal 2: `tcpdump -i eth0`
     * Restart inverter. Watch for `A? server.desmonitor.com` or `A? udp.solarmanpv.com`.
     * **Note the Domain.**
-4.  **Cleanup:** Press `Ctrl+C` in both terminals.
+3.  **Cleanup:** Press `Ctrl+C` in both terminals.
 
 ---
 
@@ -736,6 +743,7 @@ automations.yaml:
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
