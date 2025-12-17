@@ -35,7 +35,7 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 
 ### Step 0: The OpenWRT "Fast Track" 🚀
 
-**Do you have an OpenWRT router?** If yes, simply add this block to your `/etc/config/firewall` file to redirect the hardcoded Chinese cloud IP (`8.218.202.213`) to your local bridge.
+**Do you have an OpenWRT router?** If yes, simply add this block to your `/etc/config/firewall` file to redirect the hardcoded Chinese cloud IP (`8.218.202.213`) to your local bridge and skip Step 1. If it's not working, go back Step 1.
 
 **Edit:** `/etc/config/firewall`
 
