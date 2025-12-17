@@ -146,7 +146,6 @@ Add this to your `configuration.yaml`. We use `nc` (Netcat) instead of Python fo
 
 
 ```yaml
-
 input_select:
   inverter_buzzer_mode:
     name: "Inverter Buzzer Mode"
@@ -183,27 +182,6 @@ input_select:
       - "Solar Only (OSO)"
     icon: mdi:battery-charging
 
-  inverter_max_ac_amps:
-    name: "Max AC Charge Amps"
-    options:
-      - "5"
-      - "10"
-      - "15"
-      - "20"
-      - "25"
-      - "30"
-      - "35"
-      - "40"
-      - "45"
-      - "50"
-      - "55"
-      - "60"
-      - "65"
-      - "70"
-      - "75"
-      - "80"
-    icon: mdi:current-ac
-
 #--- CONTROL LOGIC ---
 shell_command:
   set_inverter_uti: '/bin/sh -c "echo MODE_0 | nc -w 5 192.168.0.105 9999"'
@@ -214,7 +192,6 @@ shell_command:
   set_charger_cso: '/bin/sh -c "echo CSO_SET | nc -w 5 192.168.0.105 9999"'
   set_charger_snu: '/bin/sh -c "echo SNU_SET | nc -w 5 192.168.0.105 9999"'
   set_charger_oso: '/bin/sh -c "echo OSO_SET | nc -w 5 192.168.0.105 9999"'
-  set_charge_amps: '/bin/sh -c "echo SET_AMPS_{{ states("input_select.inverter_max_ac_amps") }} | nc -w 5 192.168.0.105 9999"'
   set_soc_grid_direct: '/bin/sh -c "echo SET_SOC_GRID_{{ val }} | nc -w 5 192.168.0.105 9999"'
   set_soc_batt_direct: '/bin/sh -c "echo SET_SOC_BATT_{{ val }} | nc -w 5 192.168.0.105 9999"'
   set_soc_cutoff_direct: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ val }} | nc -w 5 192.168.0.105 9999"'
@@ -230,7 +207,8 @@ shell_command:
   grid_charge_off: '/bin/sh -c "echo CHARGE_OFF | nc -w 5 192.168.0.105 9999"'
   set_return_default_on: '/bin/sh -c "echo SET_RETURN_DEFAULT_1 | nc -w 5 192.168.0.105 9999"'
   set_return_default_off: '/bin/sh -c "echo SET_RETURN_DEFAULT_0 | nc -w 5 192.168.0.105 9999"'
-  
+  set_charge_amps_direct: '/bin/sh -c "echo SET_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
+  set_total_amps_direct: '/bin/sh -c "echo SET_TOTAL_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
 # --- SENSOR CONFIGURATION ---
 command_line:
   - sensor:
@@ -263,6 +241,7 @@ command_line:
         - buzzer_mode
         - backlight_status
         - ac_input_range
+        - max_total_amps
         - max_ac_amps
         - temp_dc
         - temp_inv
@@ -290,6 +269,33 @@ command_line:
 
 template:
   - number:
+      - name: "Max Charging Current (Total)"
+        unique_id: max_charging_current_total
+        icon: mdi:battery-charging-high
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'max_total_amps') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_total_amps_direct
+          data:
+            val: "{{ value | int }}"
+        min: 10
+        max: 120
+        step: 1
+
+      - name: "Max AC Charge Amps"
+        unique_id: num_max_ac_amps
+        min: 5
+        max: 80
+        step: 1
+        unit_of_measurement: "A"
+        icon: mdi:current-ac
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'max_ac_amps') | int(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_charge_amps_direct
+          data:
+            val: "{{ value | int }}"
+
       - name: "Back to Grid SOC (Prg 43)"
         unique_id: num_soc_grid
         min: 4
@@ -297,13 +303,11 @@ template:
         step: 1
         unit_of_measurement: "%"
         icon: mdi:battery-arrow-down
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') | int(0) }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         set_value:
-          # Calls the specific command
           service: shell_command.set_soc_grid_direct
           data:
-            # Passes the slider value into the 'val' placeholder we created above
             val: "{{ value | int }}"
 
       - name: "Back to Battery SOC (Prg 44)"
@@ -313,7 +317,7 @@ template:
         step: 1
         unit_of_measurement: "%"
         icon: mdi:battery-arrow-up
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') | int(0) }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         set_value:
           service: shell_command.set_soc_batt_direct
@@ -327,7 +331,7 @@ template:
         step: 1
         unit_of_measurement: "%"
         icon: mdi:battery-alert
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_cutoff') }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_cutoff') | int(0) }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         set_value:
           service: shell_command.set_soc_cutoff_direct
@@ -395,7 +399,7 @@ template:
         unique_id: inv_load_apparent_power
         unit_of_measurement: "VA"
         device_class: apparent_power
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_va') | float(0) }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_va')}}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         icon: mdi:flash-outline  
 
@@ -403,7 +407,7 @@ template:
         unique_id: inv_house_load_watts
         unit_of_measurement: "W"
         device_class: power
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') | float(0) }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt')}}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
 
       - name: "Output Power Factor"
@@ -412,12 +416,16 @@ template:
         state_class: measurement
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
-          {% set real = state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') | float(0) %}
-          {% set va = state_attr('sensor.inverter_bridge_data', 'ac_load_va') | float(0) %}
-          {% if va > 0 %}
-            {{ (real / va) | round(2) }}
+          {% set real = state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') %}
+          {% set va = state_attr('sensor.inverter_bridge_data', 'ac_load_va') %}
+          {% if is_number(real) and is_number(va) %}
+            {% if va | float > 0 %}
+              {{ (real | float / va | float) | round(2) }}
+            {% else %}
+              1.0
+            {% endif %}
           {% else %}
-            1.0
+            None
           {% endif %}
           
       - name: "Inverter Temp (DC)"
@@ -465,8 +473,14 @@ template:
         device_class: current
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
-          {% set raw_amps = state_attr('sensor.inverter_bridge_data', 'batt_current') | float(0) %}
-          {{ (raw_amps * 0.92) | round(1) }}
+          {% set raw_amps = state_attr('sensor.inverter_bridge_data', 'batt_current') %}
+          
+          {# Only calculate if raw_amps is actually a number #}
+          {% if is_number(raw_amps) %}
+            {{ (raw_amps | float * 0.92) | round(1) }}
+          {% else %}
+            None
+          {% endif %}
         icon: mdi:current-dc
         
       - name: "BMS Battery Percentage"
@@ -490,11 +504,16 @@ template:
         device_class: power
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         state: >
-          {% set raw = state_attr('sensor.inverter_bridge_data', 'batt_power_watt') | float(0) %}
-          {% if raw < 0 %}
-            {{ (raw * 0.86) | round(0) }}
+          {% set raw = state_attr('sensor.inverter_bridge_data', 'batt_power_watt') %}
+          {% if is_number(raw) %}
+            {% set raw_f = raw | float %}
+            {% if raw_f < 0 %}
+              {{ (raw_f * 0.86) | round(0) }}
+            {% else %}
+              {{ raw_f }}
+            {% endif %}
           {% else %}
-            {{ raw }}
+            None
           {% endif %}
         icon: mdi:battery-charging
 
@@ -539,7 +558,6 @@ template:
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
-
 ```
 
 automations.yaml:
@@ -590,17 +608,6 @@ automations.yaml:
     - conditions: '{{ trigger.to_state.state == ''Solar Only (OSO)'' }}'
       sequence:
       - action: shell_command.set_charger_oso
-  mode: single
-- id: '1765815798845'
-  alias: 'Inverter: Set Max AC Amps'
-  triggers:
-  - entity_id: input_select.inverter_max_ac_amps
-    trigger: state
-  conditions:
-  - condition: template
-    value_template: '{{ trigger.to_state.context.user_id != None }}'
-  actions:
-  - action: shell_command.set_charge_amps
   mode: single
 - id: '1765823166092'
   alias: 'Inverter: Set AC Range'
@@ -693,14 +700,6 @@ automations.yaml:
             %}
 
             '
-  - choose:
-    - conditions: '{{ amps_raw is not none and amps_raw | int > 0 }}'
-      sequence:
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.inverter_max_ac_amps
-        data:
-          option: '{{ amps_raw | int | string }}'
   mode: single
   max_exceeded: silent
 
