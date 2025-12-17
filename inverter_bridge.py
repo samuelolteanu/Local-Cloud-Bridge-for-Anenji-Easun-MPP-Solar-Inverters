@@ -68,13 +68,14 @@ current_inverter_conn = None
 modbus_lock = threading.Lock()
 last_cmd_time = 0 
 
+# Settings/Limits are kept as integers to prevent logic errors in control_server.
 latest_data_json = {
     "fault_code": 0,
-    "fault_msg": "No Fault",      
+    "fault_msg": "Initializing...",      
     "warning_code": 0,            
-    "warning_msg": "No Warning",  
+    "warning_msg": "Initializing...",  
     "device_status_code": 0,
-    "device_status_msg": "Standby",
+    "device_status_msg": "Initializing...",
     "fault_bitmask": 0,
     "warning_bitmask": 0,
     "charger_priority": 3,
@@ -83,24 +84,29 @@ latest_data_json = {
     "buzzer_mode": 3,
     "backlight_status": 1,
     "return_to_default": 0,
-    "batt_volt": 0,
-    "ac_load_va": 0,
-    "ac_load_real_watt": 0,
-    "ac_load_pct": 0,
-    "batt_power_watt": 0,
-    "grid_power_watt": 0,
-    "ac_output_amp": 0,
-    "pv_input_watt": 0,
-    "pv_input_volt": 0,
-    "pv_current": 0,
-    "batt_soc": 0,
-    "temp_dc": 0,
-    "temp_inv": 0,
-    "max_ac_amps": 0,
+    
+    # Sensors (Initialized to None so HA treats them as Unknown until data arrives)
+    "batt_volt": None,
+    "ac_load_va": None,
+    "ac_load_real_watt": None,
+    "ac_load_pct": None,
+    "batt_power_watt": None,
+    "grid_power_watt": None,
+    "ac_output_amp": None,
+    "pv_input_watt": None,
+    "pv_input_volt": None,
+    "pv_current": None,
+    "batt_soc": None,    
+    "temp_dc": None,
+    "temp_inv": None,
+    "max_total_amps": None,
+    "max_ac_amps": None,
+    "batt_current": None,
+
+    # Settings (Must stay int to avoid logic crash in setters)
     "soc_back_to_grid": 100,  
     "soc_back_to_batt": 100,
     "soc_cutoff": 0,
-    "batt_current": 0
 }
 
 def modbus_crc(data):
@@ -205,8 +211,9 @@ def inverter_server():
                             time.sleep(0.1)
                             vals_prio = read_modbus_response(conn)
 
+                            # Read Total Amps (332) and AC Amps (333)
                             flush_buffer(conn)
-                            conn.send(build_read_packet(333, 1))
+                            conn.send(build_read_packet(332, 2))
                             time.sleep(0.1)
                             vals_amps = read_modbus_response(conn)
 
@@ -225,7 +232,11 @@ def inverter_server():
                                 latest_data_json["return_to_default"] = vals_306[0]
 
                             if vals_prio: latest_data_json["charger_priority"] = vals_prio[0]
-                            if vals_amps: latest_data_json["max_ac_amps"] = vals_amps[0] / 10.0
+                            
+                            if vals_amps and len(vals_amps) >= 2:
+                                latest_data_json["max_total_amps"] = vals_amps[0] / 10.0 # Reg 332
+                                latest_data_json["max_ac_amps"] = vals_amps[1] / 10.0    # Reg 333
+
                             if vals_soc and len(vals_soc) >= 3:
                                 latest_data_json["soc_back_to_grid"] = vals_soc[0]
                                 latest_data_json["soc_back_to_batt"] = vals_soc[1]
@@ -241,7 +252,6 @@ def inverter_server():
                                 if vals and len(vals) >= 10:
                                     p_discharge = vals[8]
                                     p_charge = vals[9]
-                                    # If we are discharging (>0) or charging (>0), battery is connected
                                     if p_discharge > 0 or p_charge > 0 or status_code == 3:
                                         batt_is_active = True
 
@@ -255,7 +265,6 @@ def inverter_server():
                                 
                                 active_warnings = [] 
                                 
-                                # GLITCH FILTER: Skip decoding if data is garbage (All 1s)
                                 if reg_104 != 65535 and reg_105 != 65535:
                                     
                                     # -- Reg 104 Checks --
@@ -266,7 +275,6 @@ def inverter_server():
                                     if (reg_104 & 16):  active_warnings.append("Output Derating (10)")
                                     if (reg_104 & 32):  active_warnings.append("PV Energy Low (15)")
                                     
-                                    # PHYSICS CHECK: Only show "Battery Open" (Reg104 Bit6) if battery is IDLE
                                     if (reg_104 & 64) and not batt_is_active:
                                         active_warnings.append("Battery Open (bP)")
                                         
@@ -274,17 +282,12 @@ def inverter_server():
                                     if (reg_104 & 256): active_warnings.append("Low Battery (04-Alt)")
 
                                     # -- Reg 105 Checks (CRITICAL) --
-                                    
-                                    # SMART FILTER 1: System Fault Context
                                     if (reg_105 & 1):
                                         if status_code not in [2, 3]: 
                                             active_warnings.append("System Fault (01)")
 
-                                    # SMART FILTER 2: Battery Recovery Context
                                     is_recovering = (reg_105 & 4096) != 0
                                     
-                                    # PHYSICS CHECK: Only show "Battery Open" (Reg105 Bit6) if battery is IDLE
-                                    # AND not recovering
                                     if (reg_105 & 64) and not is_recovering and not batt_is_active:
                                         active_warnings.append("Battery Open (64)")
                                     
@@ -390,7 +393,6 @@ def control_server():
                 
                 # --- COMMANDS ---
                 
-                # NEW SPECIFIC COMMAND (Reg 306)
                 if req.startswith("SET_RETURN_DEFAULT_"):
                     cmd_packet = build_write_packet(306, int(req.split("_")[3]))
                     latest_data_json["return_to_default"] = int(req.split("_")[3])
@@ -410,12 +412,21 @@ def control_server():
                 elif req == "CSO_SET":
                     cmd_packet = build_write_packet(331, 1)
                     latest_data_json["charger_priority"] = 1
+                
                 elif req.startswith("SET_AMPS_"):
                     try:
                         amps = int(req.split("_")[2])
                         cmd_packet = build_write_packet(333, amps * 10)
                         latest_data_json["max_ac_amps"] = amps
                     except: pass
+                
+                elif req.startswith("SET_TOTAL_AMPS_"):
+                    try:
+                        amps = int(req.split("_")[3])
+                        cmd_packet = build_write_packet(332, amps * 10)
+                        latest_data_json["max_total_amps"] = amps
+                    except: pass
+
                 elif req.startswith("SET_SOC_GRID_"):
                     try:
                         val = int(req.split("_")[3])
