@@ -4,6 +4,7 @@ import struct
 import time
 import json
 import os
+import traceback
 
 # --- CONFIGURATION ---
 INVERTER_PORT = 18899
@@ -14,7 +15,7 @@ INVERTER_RATED_WATT = 6200
 
 # --- TRANSLATION MAPS ---
 
-# Map for Fault Codes
+# FAULT CODES (Reg 101 - Numeric)
 FAULT_MAP = {
     0:  "No Fault",
     1:  "Over temperature of inverter module",
@@ -33,7 +34,7 @@ FAULT_MAP = {
     14: "Bus voltage is too low",
     15: "Inverter failed (Self-checking)",
     18: "Op current offset is too high",
-    19: "BMS Communication Fail",
+    19: "Inverter current offset is too high", 
     20: "DC/DC current offset is too high",
     21: "PV current offset is too high",
     22: "Output voltage is too low",
@@ -48,13 +49,13 @@ FAULT_MAP = {
     99: "Unknown Fault"
 }
 
-# Map for Device Status (Reg 201)
+# STATUS MAP (Reg 201)
 STATUS_MAP = {
     0: "Standby / Power Off",
     1: "Fault Mode",           
     2: "Line Mode (On-Grid)",  
     3: "Battery Mode",         
-    4: "Fault Mode",       
+    4: "Bypass / Warning Mode", 
     5: "Power Saving Mode",
     6: "Online Mode",
     7: "Bypass Mode",
@@ -70,6 +71,8 @@ last_cmd_time = 0
 latest_data_json = {
     "fault_code": 0,
     "fault_msg": "No Fault",      
+    "warning_code": 0,            
+    "warning_msg": "No Warning",  
     "device_status_code": 0,
     "device_status_msg": "Standby",
     "fault_bitmask": 0,
@@ -79,6 +82,7 @@ latest_data_json = {
     "ac_input_range": 0,
     "buzzer_mode": 3,
     "backlight_status": 1,
+    "return_to_default": 0,
     "batt_volt": 0,
     "ac_load_va": 0,
     "ac_load_real_watt": 0,
@@ -173,7 +177,7 @@ def inverter_server():
                         time.sleep(0.1) 
                         vals = read_modbus_response(conn)
 
-                        # 2. READ FAULT CODES (Block 100)
+                        # 2. READ FAULT/WARNING (Block 100)
                         vals_fault = None
                         if loop_counter % 2 == 0:
                             flush_buffer(conn)
@@ -184,11 +188,18 @@ def inverter_server():
                         # 3. READ SETTINGS
                         is_cooldown = (time.time() - last_cmd_time) < 10.0
                         if (loop_counter % 5 == 0) and (not is_cooldown):
+                            # Step 3a: Read Main Settings
                             flush_buffer(conn)
                             conn.send(build_read_packet(301, 5))
                             time.sleep(0.1)
                             vals_300 = read_modbus_response(conn)
                             
+                            # Step 3b: Read Auto-Return (306) Separately
+                            flush_buffer(conn)
+                            conn.send(build_read_packet(306, 1))
+                            time.sleep(0.1)
+                            vals_306 = read_modbus_response(conn)
+
                             flush_buffer(conn)
                             conn.send(build_read_packet(331, 1))
                             time.sleep(0.1)
@@ -210,6 +221,9 @@ def inverter_server():
                                 latest_data_json["buzzer_mode"] = vals_300[2]
                                 latest_data_json["backlight_status"] = vals_300[4]
 
+                            if vals_306:
+                                latest_data_json["return_to_default"] = vals_306[0]
+
                             if vals_prio: latest_data_json["charger_priority"] = vals_prio[0]
                             if vals_amps: latest_data_json["max_ac_amps"] = vals_amps[0] / 10.0
                             if vals_soc and len(vals_soc) >= 3:
@@ -218,47 +232,93 @@ def inverter_server():
                                 latest_data_json["soc_cutoff"] = vals_soc[2]
 
                         # --- UPDATE SENSORS JSON ---
-                        if vals_fault and len(vals_fault) >= 5:
-                            numeric_fault = vals_fault[1] # Reg 101
-                            reg_104 = vals_fault[4]       # Reg 104 (Bitmask)
-                            reg_105 = vals_fault[5] if len(vals_fault) > 5 else 0
+                        if vals_fault and len(vals_fault) >= 6:
+                            try:
+                                status_code = vals[1] if vals and len(vals) >= 2 else 0
+                                
+                                # PRE-CALCULATE BATTERY ACTIVITY for Physics Check
+                                batt_is_active = False
+                                if vals and len(vals) >= 10:
+                                    p_discharge = vals[8]
+                                    p_charge = vals[9]
+                                    # If we are discharging (>0) or charging (>0), battery is connected
+                                    if p_discharge > 0 or p_charge > 0 or status_code == 3:
+                                        batt_is_active = True
 
-                            final_error = 0
-                            
-                            # Priority A: Numeric Fault
-                            if numeric_fault > 0 and numeric_fault < 100:
-                                final_error = numeric_fault
-                            
-                            # Priority B: Bitmasks (Reg 104)
-                            elif (reg_104 & 8):   # Bit 3 = Error 19
-                                final_error = 19
-                            elif (reg_104 & 2):   # Bit 1 = Error 02
-                                final_error = 2   
-                            elif (reg_104 & 4):   # Bit 2 = Error 07
-                                final_error = 7   
-                            
-                            latest_data_json["fault_code"] = final_error
-                            latest_data_json["fault_bitmask"] = reg_104
-                            latest_data_json["warning_bitmask"] = reg_105
-                            
-                            # Lookup Description
-                            latest_data_json["fault_msg"] = FAULT_MAP.get(final_error, f"Unknown Error {final_error}")
+                                # 1. FAULTS
+                                numeric_fault = vals_fault[1] 
+                                latest_data_json["fault_code"] = numeric_fault
+                                
+                                # 2. WARNINGS DECODING
+                                reg_104 = vals_fault[4] # Primary Warnings
+                                reg_105 = vals_fault[5] # Secondary/Critical Warnings
+                                
+                                active_warnings = [] 
+                                
+                                # GLITCH FILTER: Skip decoding if data is garbage (All 1s)
+                                if reg_104 != 65535 and reg_105 != 65535:
+                                    
+                                    # -- Reg 104 Checks --
+                                    if (reg_104 & 1):   active_warnings.append("Fan Locked (01)")
+                                    if (reg_104 & 2):   active_warnings.append("Temperature High (02)")
+                                    if (reg_104 & 4):   active_warnings.append("Low Battery (04)")
+                                    if (reg_104 & 8):   active_warnings.append("BMS Fail (19)")
+                                    if (reg_104 & 16):  active_warnings.append("Output Derating (10)")
+                                    if (reg_104 & 32):  active_warnings.append("PV Energy Low (15)")
+                                    
+                                    # PHYSICS CHECK: Only show "Battery Open" (Reg104 Bit6) if battery is IDLE
+                                    if (reg_104 & 64) and not batt_is_active:
+                                        active_warnings.append("Battery Open (bP)")
+                                        
+                                    if (reg_104 & 128): active_warnings.append("Power Limit (09)")
+                                    if (reg_104 & 256): active_warnings.append("Low Battery (04-Alt)")
+
+                                    # -- Reg 105 Checks (CRITICAL) --
+                                    
+                                    # SMART FILTER 1: System Fault Context
+                                    if (reg_105 & 1):
+                                        if status_code not in [2, 3]: 
+                                            active_warnings.append("System Fault (01)")
+
+                                    # SMART FILTER 2: Battery Recovery Context
+                                    is_recovering = (reg_105 & 4096) != 0
+                                    
+                                    # PHYSICS CHECK: Only show "Battery Open" (Reg105 Bit6) if battery is IDLE
+                                    # AND not recovering
+                                    if (reg_105 & 64) and not is_recovering and not batt_is_active:
+                                        active_warnings.append("Battery Open (64)")
+                                    
+                                    if is_recovering:
+                                        if status_code == 2: 
+                                            active_warnings.append("Battery Recovering (Waiting for Charge)")
+                                        else:
+                                            active_warnings.append("Battery Cutoff/Under Voltage (4096)")
+
+                                    # Update JSON
+                                    if not active_warnings:
+                                        latest_data_json["warning_msg"] = "No Warning"
+                                        latest_data_json["warning_code"] = 0
+                                    else:
+                                        latest_data_json["warning_msg"] = ", ".join(active_warnings)
+                                        latest_data_json["warning_code"] = 99
+                                    
+                                    # FAULT FALLBACK
+                                    if numeric_fault == 0 and status_code == 1 and active_warnings:
+                                        latest_data_json["fault_msg"] = "FAULT: " + ", ".join(active_warnings)
+                                    else:
+                                        latest_data_json["fault_msg"] = FAULT_MAP.get(numeric_fault, f"Unknown Fault {numeric_fault}")
+
+                                    latest_data_json["fault_bitmask"] = reg_104
+                                    latest_data_json["warning_bitmask"] = reg_105
+                            except Exception as e:
+                                print(f"[!] Error decoding warnings: {e}")
+                                traceback.print_exc()
 
                         if vals and len(vals) >= 40:
                             # Status decoding
                             status_code = vals[1]
-                            status_msg = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
-
-                            # --- v50 SAFETY OVERRIDE ---
-                            # If we have a confirmed fault code, force the Status to "Fault Mode".
-                            # This overrides "Line Mode" or "Unknown(4)" if the battery is dead.
-                            if latest_data_json["fault_code"] != 0:
-                                status_msg = "Fault Mode"
-                                status_code = 1
-                            # ---------------------------
-
                             latest_data_json["device_status_code"] = status_code
-                            latest_data_json["device_status_msg"] = status_msg
+                            latest_data_json["device_status_msg"] = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
 
                             v_batt = vals[15] / 10.0
                             p_load_va = vals[14]
@@ -329,7 +389,13 @@ def control_server():
                 cmd_packet = None
                 
                 # --- COMMANDS ---
-                if req.startswith("MODE_"):
+                
+                # NEW SPECIFIC COMMAND (Reg 306)
+                if req.startswith("SET_RETURN_DEFAULT_"):
+                    cmd_packet = build_write_packet(306, int(req.split("_")[3]))
+                    latest_data_json["return_to_default"] = int(req.split("_")[3])
+
+                elif req.startswith("MODE_"):
                     cmd_packet = build_write_packet(301, int(req.split("_")[1]))
                     latest_data_json["output_mode"] = int(req.split("_")[1])
                 elif req.startswith("SET_AC_RANGE_"):
