@@ -814,8 +814,18 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 | **342** | SOC Back to Batt | Percentage % | `vals_soc[1]` |
 | **343** | SOC Cut-off | Percentage % | `vals_soc[2]` |
 
-
-
+### 🧮 Calculated Sensors Map
+| Sensor | Formula | Unit / Description | Script Variable |
+| :--- | :--- | :--- | :--- |
+| **Grid Current** | `grid_power_watt / grid_volt` | A (Amperes drawn from grid) | `latest_data_json["grid_current"]` |
+| **Battery Current** | `abs(batt_power_watt) / batt_volt` | A (Charge/Discharge current) | `latest_data_json["batt_current"]` |
+| **PV Current** | `pv_input_watt / pv_input_volt` | A (Solar panel current) | `latest_data_json["pv_current"]` |
+| **AC Load Percentage** | `min((ac_load_va / 6200) * 100, 300)` | % (Load relative to rated 6200W) | `latest_data_json["ac_load_pct"]` |
+| **Total PV Energy** | `∫(pv_input_watt * dt) / 3600000` | kWh (Cumulative solar production) | `latest_data_json["total_pv_energy_kwh"]` |
+| **Total Grid Input** | `∫(grid_power_watt * dt) / 3600000` (when grid_power > 0) | kWh (Cumulative grid consumption) | `latest_data_json["total_grid_input_kwh"]` |
+| **Total Load Energy** | `∫(ac_load_real_watt * dt) / 3600000` | kWh (Cumulative household consumption) | `latest_data_json["total_load_kwh"]` |
+| **Total Battery Charge** | `∫(abs(batt_power_watt) * dt) / 3600000` (when batt_power < 0) | kWh (Cumulative energy charged into battery) | `latest_data_json["total_battery_charge_kwh"]` |
+| **Total Battery Discharge** | `∫(batt_power_watt * dt) / 3600000` (when batt_power > 0) | kWh (Cumulative energy discharged from battery) | `latest_data_json["total_battery_discharge_kwh"]` |
 ## ⚠️ Disclaimer & Safety Warning
 
 **Use at your own risk.** This project is not affiliated with Anenji, Easun, MPP Solar, or any other manufacturer.
@@ -823,6 +833,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
