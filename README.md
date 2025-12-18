@@ -241,14 +241,12 @@ command_line:
       # Using -w 3 ensures it fails/timeouts if bridge is down
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 1
-      # Only mark as "Online" if we actually got valid JSON data
       value_template: >
         {% if value_json is defined %}
           Online
         {% else %}
           Offline
         {% endif %}
-      # If the command fails (exit code 1), the sensor becomes Unavailable automatically.
       json_attributes:
         - fault_msg
         - warning_code
@@ -373,7 +371,6 @@ template:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
         state: "{{ state_attr('sensor.inverter_bridge_data', 'backlight_status') == 1 }}"
-        # This switch becomes Unavailable if the bridge is down
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.set_backlight_on
@@ -384,7 +381,6 @@ template:
       - name: "Grid Charging"
         unique_id: grid_chargingz_template
         state: "{{ state_attr('sensor.inverter_bridge_data', 'charger_priority') | int(default=3) == 2 }}"
-        # This switch becomes Unavailable if the bridge is down
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.grid_charge_on
@@ -443,7 +439,6 @@ template:
         icon: mdi:battery-minus
         state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_discharge_kwh') }}"
 
-      # 1. Device Status (e.g., "Line Mode", "Battery Mode", "Warning Mode")
       - name: "Inverter Status"
         unique_id: inv_device_status
         icon: mdi:information-outline
@@ -782,37 +777,37 @@ This command prints all data on any terminal on local network:
 echo "JSON" | nc -w 1 <bridge ip> 9999
 ```
 ```json
-{"fault_code": 0, "fault_msg": "No Fault", "warning_code": 0, "warning_msg": "No Warning", "device_status_code": 3, "device_status_msg": "Battery Mode", "fault_bitmask": 0, "warning_bitmask": 65, "charger_priority": 3, "output_mode": 3, "ac_input_range": 1, "buzzer_mode": 0, "backlight_status": 1, "return_to_default": 0, "batt_volt": 52.6, "ac_load_va": 1194, "ac_load_real_watt": 855, "ac_load_pct": 19.3, "batt_power_watt": 936, "grid_power_watt": 0, "ac_output_amp": 5.2, "pv_input_watt": 0, "pv_input_volt": 135.3, "pv_current": 0.0, "batt_soc": 59, "temp_dc": 26, "temp_inv": 30, "max_total_amps": 101.0, "max_ac_amps": 70.0, "batt_current": 17.8, "soc_back_to_grid": 10, "soc_back_to_batt": 60, "soc_cutoff": 3, "grid_volt": 0.0, "grid_freq": 0.0, "ac_out_volt": 229.8}
+{"fault_code": 0, "fault_msg": "No Fault", "warning_code": 99, "warning_msg": "Warning Active", "device_status_code": 3, "device_status_msg": "Battery Mode", "fault_bitmask": 0, "warning_bitmask": 65, "batt_volt": 52.5, "ac_load_va": 1081, "ac_load_real_watt": 1036, "ac_load_pct": 17.4, "batt_power_watt": 1120, "grid_power_watt": 0, "ac_output_amp": 4.7, "pv_input_watt": 0, "pv_input_volt": 32.4, "pv_current": 0.0, "batt_soc": 63, "temp_dc": 32, "temp_inv": 27, "max_total_amps": 120.0, "max_ac_amps": 70.0, "batt_current": 21.3, "grid_volt": 0.0, "grid_freq": 0.0, "ac_out_volt": 230.0, "ac_out_amp": 4.7, "return_to_default": 0, "charger_priority": 3, "output_mode": 3, "ac_input_range": 1, "buzzer_mode": 0, "backlight_status": 1, "soc_back_to_grid": 10, "soc_back_to_batt": 60, "soc_cutoff": 3, "grid_current": 0.0, "inverter_temp": 27, "grid_charge_setting": 0, "total_pv_energy_kwh": 4269.3469, "total_grid_input_kwh": 14.3268, "total_load_kwh": 13.0326, "total_battery_charge_kwh": 5.3052, "total_battery_discharge_kwh": 4.6439, "ac_load_watt": 1036}
 ```
 
 ### 📊 Register Map
 
 | Register | Function | Unit / Description | Script Variable |
 | :--- | :--- | :--- | :--- |
-| **101** | **Fault Code** | **Numeric Error Code (e.g. 19)** | `vals_fault[1]` |
-| **104** | **Warning Bitmask 1** | **Primary Warnings**<br>Bit 6 = Battery Open (bP)<br>Bit 8 = Low Battery (04) | `vals_fault[4]` |
-| **105** | **Warning Bitmask 2** | **Critical / Hidden Warnings**<br>Bit 0 = System Fault (01)<br>Bit 6 = Internal Batt Relay Open (64)<br>Bit 12 = Battery Cutoff / Recovery (4096) | `vals_fault[5]` |
+| **101** | Fault Code | Numeric Error Code (e.g. 19) | `vals_fault[1]` |
+| **104** | Warning Bitmask 1 | Primary Warnings<br>Bit 6 = Battery Open (bP)<br>Bit 8 = Low Battery (04) | `vals_fault[4]` |
+| **105** | Warning Bitmask 2 | Critical / Hidden Warnings<br>Bit 0 = System Fault (01)<br>Bit 6 = Internal Batt Relay Open (64)<br>Bit 12 = Battery Cutoff / Recovery (4096) | `vals_fault[5]` |
 | **201** | Device Status | 0=Standby, 2=Line, 3=Batt, 1=Fault | `vals[1]` |
 | **202** | Grid Voltage | 0.1 V | `vals[2]` |
 | **203** | Grid Frequency | 0.01 Hz | `vals[3]` |
 | **204** | Grid Power | Watts (Power drawn from Grid) | `vals[4]` |
 | **205** | Output Voltage | 0.1 V | `vals[5]` |
-| **208** | **Batt Discharge** | **Signed Int (Net Power)** | `vals[8]` |
-| **209** | **Batt Charge** | **Watts (Charging Only)** | `vals[9]` |
+| **208** | Batt Discharge | Signed Int (Net Power) | `vals[8]` |
+| **209** | Batt Charge | **Watts (Charging Only) | `vals[9]` |
 | **211** | Output Current | 0.1 A (Load Amps) | `vals[11]` |
-| **213** | **Active Output Power** | **Watts (Real House Load)** | `vals[13]` |
-| **214** | **Apparent Output** | **VA (Volt-Amps)** | `vals[14]` |
+| **213** | Active Output Power | Watts (Real House Load) | `vals[13]` |
+| **214** | Apparent Output | VA (Volt-Amps)** | `vals[14]` |
 | **215** | Battery Voltage | 0.1 V | `vals[15]` |
-| **219** | **PV Voltage** | **0.1 V** | `vals[19]` |
-| **223** | **PV Power** | **Watts** | `vals[23]` |
-| **226** | DC/Heatsink Temp | °C | `vals[26]` |
-| **227** | **Inverter Temp** | **°C** | `vals[27]` |
+| **219** | PV Voltage | 0.1 V | `vals[19]` |
+| **223** | PV Power | Watts | `vals[23]` |
+| **226** | Inverter Temp | °C | `vals[26]` |
+| **227** | DC/Heatsink Temp | °C | `vals[27]` |
 | **229** | Battery SOC | Percentage % | `vals[29]` |
 | **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB, 4=SUF | `vals_300[0]` |
 | **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `vals_300[1]` |
 | **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `vals_300[2]` |
-| **305** | **LCD Backlight** | **0=Off, 1=On** | `vals_300[4]` |
-| **306** | **Auto Return Screen** | **0=Disabled, 1=Enabled (LCD Set 19)** | `vals_306[0]` |
+| **305** | LCD Backlight | 0=Off, 1=On | `vals_300[4]` |
+| **306** | Auto Return Screen | 0=Disabled, 1=Enabled (LCD Set 19) | `vals_306[0]` |
 | **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `vals_prio[0]` |
 | **333** | Max AC Charge | 0.1 A (e.g. 300 = 30A) | `vals_amps[0]` |
 | **341** | SOC Back to Grid | Percentage % | `vals_soc[0]` |
