@@ -81,6 +81,10 @@ def save_energy_to_disk():
             with open(ENERGY_FILE + ".tmp", 'w') as f:
                 json.dump(energy_data, f, indent=2)
             os.replace(ENERGY_FILE + ".tmp", ENERGY_FILE)
+        except PermissionError:
+            print(f"[!] Energy Save Failed: File is locked or permission denied")
+        except IOError as e:
+            print(f"[!] Energy Save Failed: I/O error - {e}")
         except Exception as e:
             print(f"[!] Energy Save Failed: {e}")
 
@@ -164,6 +168,7 @@ def inverter_server():
             current_inverter_conn = conn
             conn.settimeout(2.5)
             consecutive_failures = 0
+            print(f"[*] Inverter connected from {addr[0]}:{addr[1]}")
             
             while True:
                 now = time.time()
@@ -183,9 +188,14 @@ def inverter_server():
                         else:
                             consecutive_failures = 0
                             
-                            # --- SENSOR DECODING ---
+                            # --- SENSOR DECODING (VICTRON CONVENTION) ---
+                            # Victron: negative = discharge, positive = charge
                             v_batt = vals[15] / 10.0
-                            batt_p = -vals[9] if vals[9] > 0 else to_signed(vals[8])
+                            # Original inverter logic inverted - now we flip it back
+                            batt_p_raw = -vals[9] if vals[9] > 0 else to_signed(vals[8])
+                            # Convert to Victron convention: negate the value
+                            batt_p = -batt_p_raw  # Negative when discharging, positive when charging
+                            
                             v_pv = vals[19] / 10.0
                             p_pv = vals[23]
                             v_grid = vals[2] / 10.0
@@ -211,14 +221,14 @@ def inverter_server():
                                         kwh_inc = (p_load * time_delta) / 3600000.0
                                         energy_data["total_load_kwh"] += kwh_inc
                                     
-                                    # Battery Charge (negative power = charging)
-                                    if batt_p < 0:
-                                        kwh_inc = (abs(batt_p) * time_delta) / 3600000.0
+                                    # Battery Charge (Victron: positive power = charging)
+                                    if batt_p > 0:
+                                        kwh_inc = (batt_p * time_delta) / 3600000.0
                                         energy_data["total_battery_charge_kwh"] += kwh_inc
                                     
-                                    # Battery Discharge (positive power = discharging)
-                                    elif batt_p > 0:
-                                        kwh_inc = (batt_p * time_delta) / 3600000.0
+                                    # Battery Discharge (Victron: negative power = discharging)
+                                    elif batt_p < 0:
+                                        kwh_inc = (abs(batt_p) * time_delta) / 3600000.0
                                         energy_data["total_battery_discharge_kwh"] += kwh_inc
                                     
                                     # Update JSON with rounded values
@@ -233,7 +243,10 @@ def inverter_server():
                                 save_energy_to_disk()
                                 last_save_time = now
 
-                            # --- JSON UPDATE ---
+                            # --- JSON UPDATE (with Victron sign convention) ---
+                            # Current calculation: negative when discharging, positive when charging
+                            batt_current = -round(abs(batt_p)/v_batt, 1) if (v_batt > 0 and batt_p < 0) else (round(batt_p/v_batt, 1) if v_batt > 0 else 0)
+                            
                             latest_data_json.update({
                                 "device_status_code": vals[1],
                                 "device_status_msg": STATUS_MAP.get(vals[1], "Active"),
@@ -248,11 +261,16 @@ def inverter_server():
                                 "ac_load_watt": p_load,
                                 "ac_load_va": vals[14],
                                 "ac_load_pct": round(min((vals[14]/INVERTER_RATED_WATT)*100, 300), 1),
-                                "batt_volt": v_batt, "batt_soc": vals[29], "batt_power_watt": batt_p,
-                                "batt_current": round(abs(batt_p)/v_batt, 1) if v_batt > 0 else 0,
-                                "pv_input_watt": p_pv, "pv_input_volt": v_pv,
+                                "batt_volt": v_batt, 
+                                "batt_soc": vals[29], 
+                                "batt_power_watt": batt_p,  # Victron convention applied
+                                "batt_current": batt_current,  # Victron convention applied
+                                "pv_input_watt": p_pv, 
+                                "pv_input_volt": v_pv,
                                 "pv_current": round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
-                                "temp_dc": vals[27], "temp_inv": vals[26], "inverter_temp": vals[26]
+                                "temp_dc": vals[27], 
+                                "temp_inv": vals[26], 
+                                "inverter_temp": vals[26]
                             })
                             
                             if loop_counter % 2 == 0:
@@ -260,11 +278,17 @@ def inverter_server():
                                 time.sleep(0.1)
                                 vf = read_modbus_response(conn)
                                 if vf:
+                                    # Real warnings are indicated by fault_bitmask or warning status mode
+                                    device_status = latest_data_json.get("device_status_code", 0)
+                                    has_warning = (vf[4] > 0) or (device_status == 4)
+                                    
                                     latest_data_json.update({
-                                        "fault_code": vf[1], "fault_msg": FAULT_MAP.get(vf[1], "Active"),
-                                        "fault_bitmask": vf[4], "warning_bitmask": vf[5],
-                                        "warning_code": 99 if (vf[4] > 0 or vf[5] > 0) else 0,
-                                        "warning_msg": "Warning Active" if (vf[4] > 0 or vf[5] > 0) else "No Warning"
+                                        "fault_code": vf[1], 
+                                        "fault_msg": FAULT_MAP.get(vf[1], "Active"),
+                                        "fault_bitmask": vf[4], 
+                                        "warning_bitmask": vf[5],
+                                        "warning_code": 99 if has_warning else 0,
+                                        "warning_msg": "Warning Active" if has_warning else "No Warning"
                                     })
 
                             is_cooldown = (time.time() - last_cmd_time) < 10.0
@@ -302,11 +326,15 @@ def inverter_server():
                         if consecutive_failures >= OFFLINE_THRESHOLD: break
                 loop_counter += 1
                 time.sleep(POLL_INTERVAL)
-        except: time.sleep(1)
+        except: 
+            print("[!] Connection lost, waiting for reconnect...")
+            time.sleep(1)
         finally:
+            if current_inverter_conn:
+                print("[!] Inverter disconnected")
+                current_inverter_conn.close()
+                current_inverter_conn = None
             latest_data_json = get_empty_data()
-            if current_inverter_conn: current_inverter_conn.close()
-            current_inverter_conn = None
 
 def control_server():
     global latest_data_json, last_cmd_time
