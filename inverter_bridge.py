@@ -4,7 +4,8 @@ import struct
 import time
 import json
 import os
-import traceback
+import signal
+import sys
 
 # --- CONFIGURATION ---
 INVERTER_PORT = 18899
@@ -12,113 +13,110 @@ LOCAL_CONTROL_PORT = 9999
 BIND_IP = '0.0.0.0'
 POLL_INTERVAL = 1.0 
 INVERTER_RATED_WATT = 6200 
+OFFLINE_THRESHOLD = 10 
+
+# --- ENERGY MIGRATION ---
+ENERGY_FILE = "/root/inverter_energy.json"
+SAVE_INTERVAL = 300  # Save to NAND every 5 minutes
 
 # --- TRANSLATION MAPS ---
-
-# FAULT CODES (Reg 101 - Numeric)
-FAULT_MAP = {
-    0:  "No Fault",
-    1:  "Over temperature of inverter module",
-    2:  "Over temperature of DCDC module",
-    3:  "Battery voltage is too high",
-    4:  "Over temperature of PV module",
-    5:  "Output short circuited",
-    6:  "Output voltage is too high",
-    7:  "Overload time out",
-    8:  "Bus voltage is too high",
-    9:  "Bus soft start failed",
-    10: "PV over current",
-    11: "PV over voltage",
-    12: "DCDC over current",
-    13: "Over current or surge",
-    14: "Bus voltage is too low",
-    15: "Inverter failed (Self-checking)",
-    18: "Op current offset is too high",
-    19: "Inverter current offset is too high", 
-    20: "DC/DC current offset is too high",
-    21: "PV current offset is too high",
-    22: "Output voltage is too low",
-    23: "Inverter negative power",
-    51: "Over Current Inverter",
-    52: "Bus Voltage Too Low",
-    53: "Inverter Soft Start Failed",
-    55: "Over DC Voltage in AC Output",
-    56: "Battery Connection Open",
-    57: "Current Sensor Failed",
-    58: "Output Voltage Too Low",
-    99: "Unknown Fault"
+STATUS_MAP = {
+    0: "Standby / Power Off", 1: "Fault Mode", 2: "Line Mode (On-Grid)",
+    3: "Battery Mode", 4: "Bypass / Warning Mode", 5: "Power Saving Mode",
+    6: "Online Mode", 7: "Bypass Mode", 8: "Digital Bypass", 9: "Eco Mode"
 }
 
-# STATUS MAP (Reg 201)
-STATUS_MAP = {
-    0: "Standby / Power Off",
-    1: "Fault Mode",           
-    2: "Line Mode (On-Grid)",  
-    3: "Battery Mode",         
-    4: "Bypass / Warning Mode", 
-    5: "Power Saving Mode",
-    6: "Online Mode",
-    7: "Bypass Mode",
-    8: "Digital Bypass",
-    9: "Eco Mode"
+FAULT_MAP = {
+    0: "No Fault", 1: "Over Temp (Inv)", 2: "Over Temp (DC)", 3: "Battery High",
+    56: "Battery Open", 99: "Unknown Fault"
 }
 
 # --- SHARED STATE ---
 current_inverter_conn = None
 modbus_lock = threading.Lock()
 last_cmd_time = 0 
+energy_lock = threading.Lock()
 
-# Settings/Limits are kept as integers to prevent logic errors in control_server.
-latest_data_json = {
-    "fault_code": 0,
-    "fault_msg": "Initializing...",      
-    "warning_code": 0,            
-    "warning_msg": "Initializing...",  
-    "device_status_code": 0,
-    "device_status_msg": "Initializing...",
-    "fault_bitmask": 0,
-    "warning_bitmask": 0,
-    "charger_priority": 3,
-    "output_mode": 0,
-    "ac_input_range": 0,
-    "buzzer_mode": 3,
-    "backlight_status": 1,
-    "return_to_default": 0,
+# --- SMART LOAD WITH ALL ENERGY OFFSETS ---
+def load_or_create_energy_data():
+    """Load energy data from disk or create new structure with offsets."""
+    default_structure = {
+        "total_pv_kwh": 0.0,
+        "total_grid_input_kwh": 0.0,
+        "total_load_kwh": 0.0,
+        "total_battery_charge_kwh": 0.0,
+        "total_battery_discharge_kwh": 0.0
+    }
     
-    # Sensors (Initialized to None so HA treats them as Unknown until data arrives)
-    "batt_volt": None,
-    "ac_load_va": None,
-    "ac_load_real_watt": None,
-    "ac_load_pct": None,
-    "batt_power_watt": None,
-    "grid_power_watt": None,
-    "ac_output_amp": None,
-    "pv_input_watt": None,
-    "pv_input_volt": None,
-    "pv_current": None,
-    "batt_soc": None,    
-    "temp_dc": None,
-    "temp_inv": None,
-    "max_total_amps": None,
-    "max_ac_amps": None,
-    "batt_current": None,
+    if os.path.exists(ENERGY_FILE):
+        try:
+            with open(ENERGY_FILE, 'r') as f:
+                data = json.load(f)
+                # Ensure all keys exist (migration-safe)
+                for key in default_structure:
+                    if key not in data:
+                        data[key] = default_structure[key]
+                print(f"[*] Loaded energy data:")
+                print(f"    PV: {data['total_pv_kwh']:.2f} kWh")
+                print(f"    Grid Input: {data['total_grid_input_kwh']:.2f} kWh")
+                print(f"    Load: {data['total_load_kwh']:.2f} kWh")
+                print(f"    Battery Charge: {data['total_battery_charge_kwh']:.2f} kWh")
+                print(f"    Battery Discharge: {data['total_battery_discharge_kwh']:.2f} kWh")
+                return data
+        except Exception as e:
+            print(f"[!] Error loading energy file: {e}")
+            print("[*] Creating new energy data structure.")
+            return default_structure.copy()
+    else:
+        print(f"[*] No energy file found. Creating new structure.")
+        return default_structure.copy()
 
-    # Settings (Must stay int to avoid logic crash in setters)
-    "soc_back_to_grid": 100,  
-    "soc_back_to_batt": 100,
-    "soc_cutoff": 0,
-}
+energy_data = load_or_create_energy_data()
 
+def save_energy_to_disk():
+    """Writes the current energy totals to NAND/Disk safely."""
+    with energy_lock:
+        try:
+            # Atomic write (write temp then rename) prevents corruption on power loss
+            with open(ENERGY_FILE + ".tmp", 'w') as f:
+                json.dump(energy_data, f, indent=2)
+            os.replace(ENERGY_FILE + ".tmp", ENERGY_FILE)
+        except Exception as e:
+            print(f"[!] Energy Save Failed: {e}")
+
+def get_empty_data():
+    """Initializes sensors to None, energy sensors always available."""
+    data = {
+        "fault_code": None, "fault_msg": None, "warning_code": None, "warning_msg": None,
+        "device_status_code": None, "device_status_msg": None, "fault_bitmask": None, "warning_bitmask": None,
+        "batt_volt": None, "ac_load_va": None, "ac_load_real_watt": None, "ac_load_pct": None,
+        "batt_power_watt": None, "grid_power_watt": None, "ac_output_amp": None, "pv_input_watt": None,
+        "pv_input_volt": None, "pv_current": None, "batt_soc": None, "temp_dc": None, "temp_inv": None,
+        "max_total_amps": None, "max_ac_amps": None, "batt_current": None, "grid_volt": None,
+        "grid_freq": None, "ac_out_volt": None, "ac_out_amp": None, "return_to_default": 0,
+        "charger_priority": 3, "output_mode": 0, "ac_input_range": 0, "buzzer_mode": 3,
+        "backlight_status": 1, "soc_back_to_grid": 100, "soc_back_to_batt": 100, "soc_cutoff": 0,
+        "grid_current": None, "inverter_temp": None, "grid_charge_setting": 0,
+        
+        # PERSISTENT ENERGY COUNTERS (Always available)
+        "total_pv_energy_kwh": round(energy_data["total_pv_kwh"], 4),
+        "total_grid_input_kwh": round(energy_data["total_grid_input_kwh"], 4),
+        "total_load_kwh": round(energy_data["total_load_kwh"], 4),
+        "total_battery_charge_kwh": round(energy_data["total_battery_charge_kwh"], 4),
+        "total_battery_discharge_kwh": round(energy_data["total_battery_discharge_kwh"], 4)
+    }
+    return data
+
+latest_data_json = get_empty_data()
+
+# --- MODBUS HELPERS ---
 def modbus_crc(data):
     crc = 0xFFFF
     for pos in data:
         crc ^= pos
         for i in range(8):
-            if (crc & 1) != 0:
-                crc >>= 1
-                crc ^= 0xA001
-            else:
-                crc >>= 1
+            if (crc & 1) != 0: crc >>= 1; crc ^= 0xA001
+            else: crc >>= 1
     return struct.pack('<H', crc)
 
 def to_signed(val):
@@ -137,233 +135,176 @@ def flush_buffer(conn):
         conn.settimeout(0.01)
         while conn.recv(1024): pass
     except: pass
-    finally: conn.settimeout(2.0)
+    finally: conn.settimeout(2.5)
 
 def read_modbus_response(conn):
     try:
         raw = conn.recv(1024)
-        if len(raw) < 5: return None
-        if raw[1] & 0x80: return None
-        
-        payload = raw[:-2]
-        crc_recv = raw[-2:]
-        if modbus_crc(payload) != crc_recv: return None
+        if len(raw) < 5 or raw[1] & 0x80: return None
+        if modbus_crc(raw[:-2]) != raw[-2:]: return None
+        return [x[0] for x in struct.iter_unpack('>H', raw[3 : 3 + raw[2]])]
+    except: return None
 
-        byte_count = raw[2]
-        if len(raw) < (3 + byte_count): return None
-        
-        data = raw[3 : 3 + byte_count]
-        return [x[0] for x in struct.iter_unpack('>H', data)]
-    except:
-        return None
-
+# --- SERVERS ---
 def inverter_server():
     global current_inverter_conn, latest_data_json, last_cmd_time
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((BIND_IP, INVERTER_PORT))
     s.listen(1)
-    print(f"[*] Waiting for Inverter on {INVERTER_PORT}...")
 
+    consecutive_failures = 0
     loop_counter = 0
+    last_integration_time = time.time()
+    last_save_time = time.time()
 
     while True:
         try:
             conn, addr = s.accept()
-            print(f"[+] Connected: {addr}")
             current_inverter_conn = conn
-            conn.settimeout(2.0)
+            conn.settimeout(2.5)
+            consecutive_failures = 0
             
             while True:
+                now = time.time()
+                time_delta = now - last_integration_time
+                last_integration_time = now
+
                 with modbus_lock:
                     try:
-                        # 1. READ SENSORS
                         flush_buffer(conn) 
                         conn.send(build_read_packet(200, 40))
-                        time.sleep(0.1) 
+                        time.sleep(0.15) 
                         vals = read_modbus_response(conn)
 
-                        # 2. READ FAULT/WARNING (Block 100)
-                        vals_fault = None
-                        if loop_counter % 2 == 0:
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(100, 6)) 
-                            time.sleep(0.1)
-                            vals_fault = read_modbus_response(conn)
-
-                        # 3. READ SETTINGS
-                        is_cooldown = (time.time() - last_cmd_time) < 10.0
-                        if (loop_counter % 5 == 0) and (not is_cooldown):
-                            # Step 3a: Read Main Settings
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(301, 5))
-                            time.sleep(0.1)
-                            vals_300 = read_modbus_response(conn)
+                        if vals is None:
+                            consecutive_failures += 1
+                            if consecutive_failures >= OFFLINE_THRESHOLD: break
+                        else:
+                            consecutive_failures = 0
                             
-                            # Step 3b: Read Auto-Return (306) Separately
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(306, 1))
-                            time.sleep(0.1)
-                            vals_306 = read_modbus_response(conn)
-
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(331, 1))
-                            time.sleep(0.1)
-                            vals_prio = read_modbus_response(conn)
-
-                            # Read Total Amps (332) and AC Amps (333)
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(332, 2))
-                            time.sleep(0.1)
-                            vals_amps = read_modbus_response(conn)
-
-                            flush_buffer(conn)
-                            conn.send(build_read_packet(341, 3))
-                            time.sleep(0.1)
-                            vals_soc = read_modbus_response(conn)
-
-                            if vals_300 and len(vals_300) >= 5:
-                                latest_data_json["output_mode"] = vals_300[0]
-                                latest_data_json["ac_input_range"] = vals_300[1]
-                                latest_data_json["buzzer_mode"] = vals_300[2]
-                                latest_data_json["backlight_status"] = vals_300[4]
-
-                            if vals_306:
-                                latest_data_json["return_to_default"] = vals_306[0]
-
-                            if vals_prio: latest_data_json["charger_priority"] = vals_prio[0]
-                            
-                            if vals_amps and len(vals_amps) >= 2:
-                                latest_data_json["max_total_amps"] = vals_amps[0] / 10.0 # Reg 332
-                                latest_data_json["max_ac_amps"] = vals_amps[1] / 10.0    # Reg 333
-
-                            if vals_soc and len(vals_soc) >= 3:
-                                latest_data_json["soc_back_to_grid"] = vals_soc[0]
-                                latest_data_json["soc_back_to_batt"] = vals_soc[1]
-                                latest_data_json["soc_cutoff"] = vals_soc[2]
-
-                        # --- UPDATE SENSORS JSON ---
-                        if vals_fault and len(vals_fault) >= 6:
-                            try:
-                                status_code = vals[1] if vals and len(vals) >= 2 else 0
-                                
-                                # PRE-CALCULATE BATTERY ACTIVITY for Physics Check
-                                batt_is_active = False
-                                if vals and len(vals) >= 10:
-                                    p_discharge = vals[8]
-                                    p_charge = vals[9]
-                                    if p_discharge > 0 or p_charge > 0 or status_code == 3:
-                                        batt_is_active = True
-
-                                # 1. FAULTS
-                                numeric_fault = vals_fault[1] 
-                                latest_data_json["fault_code"] = numeric_fault
-                                
-                                # 2. WARNINGS DECODING
-                                reg_104 = vals_fault[4] # Primary Warnings
-                                reg_105 = vals_fault[5] # Secondary/Critical Warnings
-                                
-                                active_warnings = [] 
-                                
-                                if reg_104 != 65535 and reg_105 != 65535:
-                                    
-                                    # -- Reg 104 Checks --
-                                    if (reg_104 & 1):   active_warnings.append("Fan Locked (01)")
-                                    if (reg_104 & 2):   active_warnings.append("Temperature High (02)")
-                                    if (reg_104 & 4):   active_warnings.append("Low Battery (04)")
-                                    if (reg_104 & 8):   active_warnings.append("BMS Fail (19)")
-                                    if (reg_104 & 16):  active_warnings.append("Output Derating (10)")
-                                    if (reg_104 & 32):  active_warnings.append("PV Energy Low (15)")
-                                    
-                                    if (reg_104 & 64) and not batt_is_active:
-                                        active_warnings.append("Battery Open (bP)")
-                                        
-                                    if (reg_104 & 128): active_warnings.append("Power Limit (09)")
-                                    if (reg_104 & 256): active_warnings.append("Low Battery (04-Alt)")
-
-                                    # -- Reg 105 Checks (CRITICAL) --
-                                    if (reg_105 & 1):
-                                        if status_code not in [2, 3]: 
-                                            active_warnings.append("System Fault (01)")
-
-                                    is_recovering = (reg_105 & 4096) != 0
-                                    
-                                    if (reg_105 & 64) and not is_recovering and not batt_is_active:
-                                        active_warnings.append("Battery Open (64)")
-                                    
-                                    if is_recovering:
-                                        if status_code == 2: 
-                                            active_warnings.append("Battery Recovering (Waiting for Charge)")
-                                        else:
-                                            active_warnings.append("Battery Cutoff/Under Voltage (4096)")
-
-                                    # Update JSON
-                                    if not active_warnings:
-                                        latest_data_json["warning_msg"] = "No Warning"
-                                        latest_data_json["warning_code"] = 0
-                                    else:
-                                        latest_data_json["warning_msg"] = ", ".join(active_warnings)
-                                        latest_data_json["warning_code"] = 99
-                                    
-                                    # FAULT FALLBACK
-                                    if numeric_fault == 0 and status_code == 1 and active_warnings:
-                                        latest_data_json["fault_msg"] = "FAULT: " + ", ".join(active_warnings)
-                                    else:
-                                        latest_data_json["fault_msg"] = FAULT_MAP.get(numeric_fault, f"Unknown Fault {numeric_fault}")
-
-                                    latest_data_json["fault_bitmask"] = reg_104
-                                    latest_data_json["warning_bitmask"] = reg_105
-                            except Exception as e:
-                                print(f"[!] Error decoding warnings: {e}")
-                                traceback.print_exc()
-
-                        if vals and len(vals) >= 40:
-                            # Status decoding
-                            status_code = vals[1]
-                            latest_data_json["device_status_code"] = status_code
-                            latest_data_json["device_status_msg"] = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
-
+                            # --- SENSOR DECODING ---
                             v_batt = vals[15] / 10.0
-                            p_load_va = vals[14]
-                            p_load_real = vals[13]
-                            v_ac_out = vals[5] / 10.0
+                            batt_p = -vals[9] if vals[9] > 0 else to_signed(vals[8])
                             v_pv = vals[19] / 10.0
                             p_pv = vals[23]
-                            
-                            p_batt_discharge = vals[8]
-                            p_batt_charge = vals[9]
-                            if p_batt_charge > 0:
-                                batt_power = -p_batt_charge
-                            else:
-                                batt_power = to_signed(p_batt_discharge)
+                            v_grid = vals[2] / 10.0
+                            p_grid = vals[4]
+                            p_load = vals[13]
 
+                            # --- ENERGY INTEGRATION (Riemann Left) ---
+                            # Only integrate if delta time is sane (< 5s)
+                            if time_delta > 0 and time_delta < 5.0:
+                                with energy_lock:
+                                    # PV Energy (only when producing)
+                                    if p_pv > 0:
+                                        kwh_inc = (p_pv * time_delta) / 3600000.0
+                                        energy_data["total_pv_kwh"] += kwh_inc
+                                    
+                                    # Grid Input Energy (only when drawing from grid)
+                                    if p_grid > 0:
+                                        kwh_inc = (p_grid * time_delta) / 3600000.0
+                                        energy_data["total_grid_input_kwh"] += kwh_inc
+                                    
+                                    # Load Energy (only when consuming)
+                                    if p_load > 0:
+                                        kwh_inc = (p_load * time_delta) / 3600000.0
+                                        energy_data["total_load_kwh"] += kwh_inc
+                                    
+                                    # Battery Charge (negative power = charging)
+                                    if batt_p < 0:
+                                        kwh_inc = (abs(batt_p) * time_delta) / 3600000.0
+                                        energy_data["total_battery_charge_kwh"] += kwh_inc
+                                    
+                                    # Battery Discharge (positive power = discharging)
+                                    elif batt_p > 0:
+                                        kwh_inc = (batt_p * time_delta) / 3600000.0
+                                        energy_data["total_battery_discharge_kwh"] += kwh_inc
+                                    
+                                    # Update JSON with rounded values
+                                    latest_data_json["total_pv_energy_kwh"] = round(energy_data["total_pv_kwh"], 4)
+                                    latest_data_json["total_grid_input_kwh"] = round(energy_data["total_grid_input_kwh"], 4)
+                                    latest_data_json["total_load_kwh"] = round(energy_data["total_load_kwh"], 4)
+                                    latest_data_json["total_battery_charge_kwh"] = round(energy_data["total_battery_charge_kwh"], 4)
+                                    latest_data_json["total_battery_discharge_kwh"] = round(energy_data["total_battery_discharge_kwh"], 4)
+
+                            # --- AUTO SAVE ---
+                            if (now - last_save_time) > SAVE_INTERVAL:
+                                save_energy_to_disk()
+                                last_save_time = now
+
+                            # --- JSON UPDATE ---
                             latest_data_json.update({
-                                "grid_volt":    vals[2] / 10.0,
-                                "grid_power_watt": vals[4],
+                                "device_status_code": vals[1],
+                                "device_status_msg": STATUS_MAP.get(vals[1], "Active"),
+                                "grid_volt": v_grid,
+                                "grid_freq": vals[3] / 100.0,
+                                "grid_power_watt": p_grid,
+                                "grid_current": round(p_grid / v_grid, 1) if v_grid > 0 else 0.0,
+                                "ac_out_volt": vals[5] / 10.0,
+                                "ac_out_amp": vals[11] / 10.0,
                                 "ac_output_amp": vals[11] / 10.0,
-                                "grid_freq":    vals[3] / 100.0,
-                                "ac_out_volt":  v_ac_out,
-                                "ac_load_va":   p_load_va,
-                                "ac_load_real_watt": p_load_real,
-                                "ac_load_pct":  round(min((p_load_va / INVERTER_RATED_WATT) * 100, 300), 1),
-                                "batt_volt":    v_batt,
-                                "batt_power_watt": batt_power,
-                                "batt_soc":     vals[29],
-                                "pv_input_watt": p_pv,
-                                "pv_input_volt": v_pv,
-                                "pv_current":    round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
-                                "temp_dc":      vals[26],
-                                "temp_inv":     vals[27],
-                                "batt_current": round(abs(batt_power) / v_batt, 1) if v_batt > 0 else 0
+                                "ac_load_real_watt": p_load,
+                                "ac_load_watt": p_load,
+                                "ac_load_va": vals[14],
+                                "ac_load_pct": round(min((vals[14]/INVERTER_RATED_WATT)*100, 300), 1),
+                                "batt_volt": v_batt, "batt_soc": vals[29], "batt_power_watt": batt_p,
+                                "batt_current": round(abs(batt_p)/v_batt, 1) if v_batt > 0 else 0,
+                                "pv_input_watt": p_pv, "pv_input_volt": v_pv,
+                                "pv_current": round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
+                                "temp_dc": vals[27], "temp_inv": vals[26], "inverter_temp": vals[26]
                             })
+                            
+                            if loop_counter % 2 == 0:
+                                conn.send(build_read_packet(100, 6))
+                                time.sleep(0.1)
+                                vf = read_modbus_response(conn)
+                                if vf:
+                                    latest_data_json.update({
+                                        "fault_code": vf[1], "fault_msg": FAULT_MAP.get(vf[1], "Active"),
+                                        "fault_bitmask": vf[4], "warning_bitmask": vf[5],
+                                        "warning_code": 99 if (vf[4] > 0 or vf[5] > 0) else 0,
+                                        "warning_msg": "Warning Active" if (vf[4] > 0 or vf[5] > 0) else "No Warning"
+                                    })
 
-                    except:
-                        break 
+                            is_cooldown = (time.time() - last_cmd_time) < 10.0
+                            if (loop_counter % 5 == 0) and (not is_cooldown):
+                                conn.send(build_read_packet(301, 6))
+                                time.sleep(0.1)
+                                v300 = read_modbus_response(conn)
+                                if v300:
+                                    latest_data_json.update({
+                                        "output_mode": v300[0], "ac_input_range": v300[1],
+                                        "buzzer_mode": v300[2], "backlight_status": v300[4],
+                                        "return_to_default": v300[5]
+                                    })
+                                conn.send(build_read_packet(331, 3))
+                                time.sleep(0.1)
+                                v330 = read_modbus_response(conn)
+                                if v330:
+                                    latest_data_json.update({
+                                        "charger_priority": v330[0],
+                                        "max_total_amps": v330[1] / 10.0,
+                                        "max_ac_amps": v330[2] / 10.0
+                                    })
+                                conn.send(build_read_packet(341, 3))
+                                time.sleep(0.1)
+                                vsoc = read_modbus_response(conn)
+                                if vsoc:
+                                    latest_data_json.update({
+                                        "soc_back_to_grid": vsoc[0],
+                                        "soc_back_to_batt": vsoc[1],
+                                        "soc_cutoff": vsoc[2]
+                                    })
+
+                    except Exception:
+                        consecutive_failures += 1
+                        if consecutive_failures >= OFFLINE_THRESHOLD: break
                 loop_counter += 1
                 time.sleep(POLL_INTERVAL)
-        except Exception:
-            time.sleep(1)
+        except: time.sleep(1)
         finally:
+            latest_data_json = get_empty_data()
             if current_inverter_conn: current_inverter_conn.close()
             current_inverter_conn = None
 
@@ -373,102 +314,75 @@ def control_server():
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((BIND_IP, LOCAL_CONTROL_PORT))
     s.listen(5)
-
     while True:
         try:
             client, _ = s.accept()
-            client.settimeout(2.0)
             req = client.recv(1024).strip().decode().upper()
-            
             if req == "JSON":
                 client.send(json.dumps(latest_data_json).encode())
-            
             elif current_inverter_conn and req:
-                if time.time() - last_cmd_time < 0.5:
-                    client.send(b"BUSY")
-                    client.close()
-                    continue
-
                 cmd_packet = None
-                
-                # --- COMMANDS ---
-                
-                if req.startswith("SET_RETURN_DEFAULT_"):
-                    cmd_packet = build_write_packet(306, int(req.split("_")[3]))
-                    latest_data_json["return_to_default"] = int(req.split("_")[3])
-
-                elif req.startswith("MODE_"):
+                if req.startswith("MODE_"): 
                     cmd_packet = build_write_packet(301, int(req.split("_")[1]))
                     latest_data_json["output_mode"] = int(req.split("_")[1])
                 elif req.startswith("SET_AC_RANGE_"):
                     cmd_packet = build_write_packet(302, int(req.split("_")[3]))
                     latest_data_json["ac_input_range"] = int(req.split("_")[3])
-                elif req == "CHARGE_ON" or req == "SNU_SET": 
-                    cmd_packet = build_write_packet(331, 2)
-                    latest_data_json["charger_priority"] = 2
-                elif req == "CHARGE_OFF" or req == "OSO_SET": 
-                    cmd_packet = build_write_packet(331, 3)
-                    latest_data_json["charger_priority"] = 3
                 elif req == "CSO_SET":
-                    cmd_packet = build_write_packet(331, 1)
-                    latest_data_json["charger_priority"] = 1
-                
-                elif req.startswith("SET_AMPS_"):
-                    try:
-                        amps = int(req.split("_")[2])
-                        cmd_packet = build_write_packet(333, amps * 10)
-                        latest_data_json["max_ac_amps"] = amps
-                    except: pass
-                
-                elif req.startswith("SET_TOTAL_AMPS_"):
-                    try:
-                        amps = int(req.split("_")[3])
-                        cmd_packet = build_write_packet(332, amps * 10)
-                        latest_data_json["max_total_amps"] = amps
-                    except: pass
-
+                    cmd_packet = build_write_packet(331, 1); latest_data_json["charger_priority"] = 1
+                elif req == "SNU_SET" or req == "CHARGE_ON":
+                    cmd_packet = build_write_packet(331, 2); latest_data_json["charger_priority"] = 2
+                elif req == "OSO_SET" or req == "CHARGE_OFF":
+                    cmd_packet = build_write_packet(331, 3); latest_data_json["charger_priority"] = 3
+                elif req.startswith("SET_AMPS_"): 
+                    val = int(req.split("_")[2])
+                    cmd_packet = build_write_packet(333, val * 10)
+                    latest_data_json["max_ac_amps"] = val
+                elif req.startswith("SET_TOTAL_AMPS_"): 
+                    val = int(req.split("_")[3])
+                    cmd_packet = build_write_packet(332, val * 10)
+                    latest_data_json["max_total_amps"] = val
                 elif req.startswith("SET_SOC_GRID_"):
-                    try:
-                        val = int(req.split("_")[3])
-                        if val >= latest_data_json["soc_cutoff"]: 
-                            cmd_packet = build_write_packet(341, val)
-                            latest_data_json["soc_back_to_grid"] = val
-                    except: pass
+                    val = int(req.split("_")[3])
+                    cmd_packet = build_write_packet(341, val)
+                    latest_data_json["soc_back_to_grid"] = val
                 elif req.startswith("SET_SOC_BATT_"):
-                    try:
-                        val = int(req.split("_")[3])
-                        cmd_packet = build_write_packet(342, val)
-                        latest_data_json["soc_back_to_batt"] = val
-                    except: pass
+                    val = int(req.split("_")[3])
+                    cmd_packet = build_write_packet(342, val)
+                    latest_data_json["soc_back_to_batt"] = val
                 elif req.startswith("SET_SOC_CUTOFF_"):
-                    try:
-                        val = int(req.split("_")[3])
-                        if val <= latest_data_json["soc_back_to_grid"]:
-                            cmd_packet = build_write_packet(343, val)
-                            latest_data_json["soc_cutoff"] = val
-                    except: pass
+                    val = int(req.split("_")[3])
+                    cmd_packet = build_write_packet(343, val)
+                    latest_data_json["soc_cutoff"] = val
                 elif req.startswith("SET_BUZZER_"):
                     cmd_packet = build_write_packet(303, int(req.split("_")[2]))
                     latest_data_json["buzzer_mode"] = int(req.split("_")[2])
                 elif req.startswith("SET_BACKLIGHT_"):
                     cmd_packet = build_write_packet(305, int(req.split("_")[2]))
                     latest_data_json["backlight_status"] = int(req.split("_")[2])
-
+                elif req.startswith("SET_RETURN_DEFAULT_"):
+                    cmd_packet = build_write_packet(306, int(req.split("_")[3]))
+                    latest_data_json["return_to_default"] = int(req.split("_")[3])
+                
                 if cmd_packet:
                     with modbus_lock:
                         flush_buffer(current_inverter_conn)
                         current_inverter_conn.send(cmd_packet)
                         last_cmd_time = time.time()
                     client.send(b"OK")
-            else:
-                client.send(b"OFFLINE")
             client.close()
         except: pass
 
+def handle_exit(signum, frame):
+    print("[*] Stopping... Saving energy data.")
+    save_energy_to_disk()
+    sys.exit(0)
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_exit)
+    signal.signal(signal.SIGINT, handle_exit)
+    
     t1 = threading.Thread(target=inverter_server, daemon=True)
     t2 = threading.Thread(target=control_server, daemon=True)
     t1.start(); t2.start()
-    try:
-        while True: time.sleep(1)
-    except KeyboardInterrupt: os._exit(0)
+    while True: time.sleep(1)
