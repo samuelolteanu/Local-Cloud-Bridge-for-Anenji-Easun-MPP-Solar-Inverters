@@ -232,13 +232,15 @@ shell_command:
   set_return_default_off: '/bin/sh -c "echo SET_RETURN_DEFAULT_0 | nc -w 5 192.168.0.105 9999"'
   set_charge_amps_direct: '/bin/sh -c "echo SET_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
   set_total_amps_direct: '/bin/sh -c "echo SET_TOTAL_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
+
+  
 # --- SENSOR CONFIGURATION ---
 command_line:
   - sensor:
       name: "Inverter Bridge Data"
       # Using -w 3 ensures it fails/timeouts if bridge is down
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
-      scan_interval: 2
+      scan_interval: 1
       # Only mark as "Online" if we actually got valid JSON data
       value_template: >
         {% if value_json is defined %}
@@ -289,6 +291,12 @@ command_line:
         - soc_back_to_batt 
         - soc_cutoff
         - grid_freq
+        - total_pv_energy_kwh
+        - total_grid_input_kwh
+        - total_load_kwh
+        - total_battery_charge_kwh
+        - total_battery_discharge_kwh
+  
 
 template:
   - number:
@@ -395,6 +403,46 @@ template:
         icon: mdi:arrow-u-left-top
 
   - sensor:
+      - name: "Solar Energy"
+        unique_id: solar_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:solar-power
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_pv_energy_kwh') }}"
+
+      - name: "Grid Import Energy"
+        unique_id: grid_import_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:transmission-tower
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_grid_input_kwh') }}"
+
+      - name: "House Load Energy"
+        unique_id: house_load_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:home-lightning-bolt
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_load_kwh') }}"
+
+      - name: "Battery Charge Energy"
+        unique_id: battery_charge_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:battery-charging
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_charge_kwh') }}"
+
+      - name: "Battery Discharge Energy"
+        unique_id: battery_discharge_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:battery-minus
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_discharge_kwh') }}"
+
       # 1. Device Status (e.g., "Line Mode", "Battery Mode", "Warning Mode")
       - name: "Inverter Status"
         unique_id: inv_device_status
@@ -581,6 +629,7 @@ template:
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
 ```
 
 automations.yaml:
