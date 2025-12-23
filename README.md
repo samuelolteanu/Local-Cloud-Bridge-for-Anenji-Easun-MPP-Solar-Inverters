@@ -96,17 +96,25 @@ dhcp-option=tag:solar_inverter,3,192.168.0.105
 3. Configure Routing & Firewall: Run these commands to enable traffic forwarding and hijack the solar port locally.
 
 ```bash
-# Enable Kernel Routing
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-inverter-routing.conf
-sysctl -p /etc/sysctl.d/99-inverter-routing.conf
+# 1. Enable IP Forwarding (Required for the LXC to act as a Gateway)
+sysctl -w net.ipv4.ip_forward=1
 
-# 1. Redirect Solar Traffic (18899) to the local Python process
+# 2. Redirect "Control" Traffic to Local Script
+# Any TCP packet from the Dongle (192.168.0.111) destined for Port 18899 
+# is grabbed and sent to the LXC's local port 18899.
 iptables -t nat -A PREROUTING -s 192.168.0.111 -p tcp --dport 18899 -j REDIRECT --to-port 18899
 
-# 2. Masquerade outbound traffic (Allows Inverter -> Bridge -> Internet)
-iptables -t nat -A POSTROUTING -s 192.168.0.111 -o eth0 -j MASQUERADE
+# 3. Redirect "Data Logging" Traffic to Local Script
+# We send Port 38899 to 18899 as well, because your script's new "AT+DTUPN?" 
+# logic is universal enough to handle the initial handshake for both.
+iptables -t nat -A PREROUTING -s 192.168.0.111 -p tcp --dport 38899 -j REDIRECT --to-port 18899
 
-# 3. Save rules permanently
+# 4. BLOCK any other Internet Access (The "Kill Switch")
+# trying to pass through the LXC to the WAN. 
+iptables -A FORWARD -s 192.168.0.111 -j DROP
+
+# 5. Save the Rules
+# Ensures these persist after a reboot.
 netfilter-persistent save
 ```
 
@@ -833,6 +841,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
