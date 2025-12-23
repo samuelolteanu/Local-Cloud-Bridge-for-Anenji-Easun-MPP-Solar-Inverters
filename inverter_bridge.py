@@ -164,12 +164,38 @@ def inverter_server():
 
     while True:
         try:
+            print("[*] Waiting for Inverter connection...")
             conn, addr = s.accept()
             current_inverter_conn = conn
-            conn.settimeout(2.5)
-            consecutive_failures = 0
+            conn.settimeout(5.0) # Increased timeout for handshake
             print(f"[*] Inverter connected from {addr[0]}:{addr[1]}")
             
+            # =========================================================
+            # === ACTIVE CLOUD EMULATION (The "Speak First" Logic) ===
+            try:
+                # 1. Send the Cloud's "Who are you?" command immediately.
+                # The capture confirms the Cloud speaks first with this exact byte sequence.
+                print("[*] Sending Wake-up Command (AT+DTUPN?)...")
+                conn.send(b'AT+DTUPN?\r\n')
+
+                # 2. Wait for the Dongle to reply with its Serial Number
+                # This clears the buffer and confirms the dongle is listening.
+                reply = conn.recv(1024)
+                print(f"[*] Dongle replied: {reply.decode(errors='ignore').strip()}")
+                
+                # 3. Brief pause to let the dongle settle before Modbus
+                time.sleep(0.5)
+
+            except Exception as e:
+                print(f"[!] Handshake failed: {e}")
+                conn.close()
+                continue
+            # =========================================================
+
+            conn.settimeout(2.5) # Revert to normal Modbus timeout
+            consecutive_failures = 0
+            
+            # === INNER POLLING LOOP ===
             while True:
                 now = time.time()
                 time_delta = now - last_integration_time
@@ -188,13 +214,11 @@ def inverter_server():
                         else:
                             consecutive_failures = 0
                             
-                            # --- SENSOR DECODING (VICTRON CONVENTION) ---
-                            # Victron: negative = discharge, positive = charge
+                            # --- SENSOR DECODING ---
                             v_batt = vals[15] / 10.0
                             # Original inverter logic inverted - now we flip it back
                             batt_p_raw = -vals[9] if vals[9] > 0 else to_signed(vals[8])
-                            # Convert to Victron convention: negate the value
-                            batt_p = -batt_p_raw  # Negative when discharging, positive when charging
+                            batt_p = -batt_p_raw  
                             
                             v_pv = vals[19] / 10.0
                             p_pv = vals[23]
@@ -202,36 +226,20 @@ def inverter_server():
                             p_grid = vals[4]
                             p_load = vals[13]
 
-                            # --- ENERGY INTEGRATION (Riemann Left) ---
-                            # Only integrate if delta time is sane (< 5s)
+                            # --- ENERGY INTEGRATION ---
                             if time_delta > 0 and time_delta < 5.0:
                                 with energy_lock:
-                                    # PV Energy (only when producing)
                                     if p_pv > 0:
-                                        kwh_inc = (p_pv * time_delta) / 3600000.0
-                                        energy_data["total_pv_kwh"] += kwh_inc
-                                    
-                                    # Grid Input Energy (only when drawing from grid)
+                                        energy_data["total_pv_kwh"] += (p_pv * time_delta) / 3600000.0
                                     if p_grid > 0:
-                                        kwh_inc = (p_grid * time_delta) / 3600000.0
-                                        energy_data["total_grid_input_kwh"] += kwh_inc
-                                    
-                                    # Load Energy (only when consuming)
+                                        energy_data["total_grid_input_kwh"] += (p_grid * time_delta) / 3600000.0
                                     if p_load > 0:
-                                        kwh_inc = (p_load * time_delta) / 3600000.0
-                                        energy_data["total_load_kwh"] += kwh_inc
-                                    
-                                    # Battery Charge (Victron: positive power = charging)
+                                        energy_data["total_load_kwh"] += (p_load * time_delta) / 3600000.0
                                     if batt_p > 0:
-                                        kwh_inc = (batt_p * time_delta) / 3600000.0
-                                        energy_data["total_battery_charge_kwh"] += kwh_inc
-                                    
-                                    # Battery Discharge (Victron: negative power = discharging)
+                                        energy_data["total_battery_charge_kwh"] += (batt_p * time_delta) / 3600000.0
                                     elif batt_p < 0:
-                                        kwh_inc = (abs(batt_p) * time_delta) / 3600000.0
-                                        energy_data["total_battery_discharge_kwh"] += kwh_inc
+                                        energy_data["total_battery_discharge_kwh"] += (abs(batt_p) * time_delta) / 3600000.0
                                     
-                                    # Update JSON with rounded values
                                     latest_data_json["total_pv_energy_kwh"] = round(energy_data["total_pv_kwh"], 4)
                                     latest_data_json["total_grid_input_kwh"] = round(energy_data["total_grid_input_kwh"], 4)
                                     latest_data_json["total_load_kwh"] = round(energy_data["total_load_kwh"], 4)
@@ -243,8 +251,7 @@ def inverter_server():
                                 save_energy_to_disk()
                                 last_save_time = now
 
-                            # --- JSON UPDATE (with Victron sign convention) ---
-                            # Current calculation: negative when discharging, positive when charging
+                            # --- JSON UPDATE ---
                             batt_current = -round(abs(batt_p)/v_batt, 1) if (v_batt > 0 and batt_p < 0) else (round(batt_p/v_batt, 1) if v_batt > 0 else 0)
                             
                             latest_data_json.update({
@@ -263,8 +270,8 @@ def inverter_server():
                                 "ac_load_pct": round(min((vals[14]/INVERTER_RATED_WATT)*100, 300), 1),
                                 "batt_volt": v_batt, 
                                 "batt_soc": vals[29], 
-                                "batt_power_watt": batt_p,  # Victron convention applied
-                                "batt_current": batt_current,  # Victron convention applied
+                                "batt_power_watt": batt_p, 
+                                "batt_current": batt_current, 
                                 "pv_input_watt": p_pv, 
                                 "pv_input_volt": v_pv,
                                 "pv_current": round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
@@ -278,7 +285,6 @@ def inverter_server():
                                 time.sleep(0.1)
                                 vf = read_modbus_response(conn)
                                 if vf:
-                                    # Real warnings are indicated by fault_bitmask or warning status mode
                                     device_status = latest_data_json.get("device_status_code", 0)
                                     has_warning = (vf[4] > 0) or (device_status == 4)
                                     
