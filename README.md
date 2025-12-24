@@ -777,7 +777,7 @@ automations.yaml:
             '
   mode: single
   max_exceeded: silent
-
+````
 **Isolate HA issues:**
 This command prints all data on any terminal on local network:
 
@@ -841,6 +841,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
