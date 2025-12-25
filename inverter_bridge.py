@@ -19,30 +19,7 @@ OFFLINE_THRESHOLD = 10
 ENERGY_FILE = "/root/inverter_energy.json"
 SAVE_INTERVAL = 300  # Save to NAND every 5 minutes
 
-# --- TRANSLATION MAPS ---
-
-import socket
-import threading
-import struct
-import time
-import json
-import os
-import signal
-import sys
-
-# --- CONFIGURATION ---
-INVERTER_PORT = 18899
-LOCAL_CONTROL_PORT = 9999
-BIND_IP = '0.0.0.0'
-POLL_INTERVAL = 1.0 
-INVERTER_RATED_WATT = 6200 
-OFFLINE_THRESHOLD = 10 
-
-# --- ENERGY MIGRATION ---
-ENERGY_FILE = "/root/inverter_energy.json"
-SAVE_INTERVAL = 300  # Save to NAND every 5 minutes
-
-# --- TRANSLATION MAPS ---
+# --- TRANSLATION MAPS (Updated from v89) ---
 STATUS_MAP = {
     0: "Power On", 1: "Standby", 2: "Line Mode (On-Grid)",
     3: "Off-Grid (Battery)", 4: "Bypass", 5: "Charging", 6: "Fault"
@@ -53,7 +30,7 @@ BATTERY_TYPE_MAP = {
     6: "LI4", 8: "LIb"
 }
 
-# --- FAULT CODES ---
+# --- FAULT CODES (New from v89) ---
 FAULT_BIT_MAP = {
     1: "F01: Over temp inverter", 2: "F02: Over temp DCDC", 3: "F03: Batt volt high",
     4: "F04: Over temp PV", 5: "F05: Output short", 6: "F06: Output volt high",
@@ -64,7 +41,7 @@ FAULT_BIT_MAP = {
     21: "F21: PV current offset", 22: "F22: Output volt low", 23: "F23: Inv negative power"
 }
 
-# --- WARNING CODES ---
+# --- WARNING CODES (New from v89) ---
 WARNING_BIT_MAP = {
     0: "W01: Grid Offline", 2: "W02: Temp high", 4: "W04: Low battery",
     7: "W07: Overload", 10: "W10: Power derating", 14: "W14: Fan blocked",
@@ -77,7 +54,7 @@ modbus_lock = threading.Lock()
 last_cmd_time = 0 
 energy_lock = threading.Lock()
 
-# --- HELPER: DECODE BITMASKS ---
+# --- HELPER: DECODE BITMASKS (From v89) ---
 def decode_flags(val, map_dict, prefix="Unknown"):
     active_list = []
     if val == 0: return []
@@ -89,6 +66,7 @@ def decode_flags(val, map_dict, prefix="Unknown"):
 
 # --- SMART LOAD WITH ALL ENERGY OFFSETS ---
 def load_or_create_energy_data():
+    """Load energy data from disk or create new structure with offsets."""
     default_structure = {
         "total_pv_kwh": 0.0,
         "total_grid_input_kwh": 0.0,
@@ -101,43 +79,62 @@ def load_or_create_energy_data():
         try:
             with open(ENERGY_FILE, 'r') as f:
                 data = json.load(f)
+                # Ensure all keys exist (migration-safe)
                 for key in default_structure:
                     if key not in data:
                         data[key] = default_structure[key]
-                print(f"[*] Loaded energy data: PV={data['total_pv_kwh']:.1f} kWh")
+                print(f"[*] Loaded energy data:")
+                print(f"    PV: {data['total_pv_kwh']:.2f} kWh")
+                print(f"    Grid Input: {data['total_grid_input_kwh']:.2f} kWh")
+                print(f"    Load: {data['total_load_kwh']:.2f} kWh")
+                print(f"    Battery Charge: {data['total_battery_charge_kwh']:.2f} kWh")
+                print(f"    Battery Discharge: {data['total_battery_discharge_kwh']:.2f} kWh")
                 return data
         except Exception as e:
             print(f"[!] Error loading energy file: {e}")
+            print("[*] Creating new energy data structure.")
             return default_structure.copy()
     else:
+        print(f"[*] No energy file found. Creating new structure.")
         return default_structure.copy()
 
 energy_data = load_or_create_energy_data()
 
 def save_energy_to_disk():
+    """Writes the current energy totals to NAND/Disk safely."""
     with energy_lock:
         try:
+            # Atomic write (write temp then rename) prevents corruption on power loss
             with open(ENERGY_FILE + ".tmp", 'w') as f:
                 json.dump(energy_data, f, indent=2)
             os.replace(ENERGY_FILE + ".tmp", ENERGY_FILE)
+        except PermissionError:
+            print(f"[!] Energy Save Failed: File is locked or permission denied")
+        except IOError as e:
+            print(f"[!] Energy Save Failed: I/O error - {e}")
         except Exception as e:
             print(f"[!] Energy Save Failed: {e}")
 
 def get_empty_data():
+    """Initializes sensors to None, energy sensors always available."""
     data = {
         "fault_code": 0, "fault_msg": "No Fault", "fault_list": [],
         "warning_code": 0, "warning_msg": "No Warning", "warning_list": [],
         "device_status_code": None, "device_status_msg": "Initializing...", 
         "batt_volt": None, "ac_load_va": None, "ac_load_real_watt": None, "ac_load_pct": None,
         "batt_power_watt": None, "grid_power_watt": None, "ac_output_amp": None, "pv_input_watt": None,
-        "pv_charging_watt": None,
+        "pv_charging_watt": None, # New Sensor
         "pv_input_volt": None, "pv_current": None, "batt_soc": None, "temp_dc": None, "temp_inv": None,
         "max_total_amps": None, "max_ac_amps": None, "batt_current": None, "grid_volt": None,
         "grid_freq": None, "ac_out_volt": None, "ac_out_amp": None, "return_to_default": 0,
         "charger_priority": 3, "output_mode": 0, "ac_input_range": 0, "buzzer_mode": 3,
         "backlight_status": 1, "soc_back_to_grid": 100, "soc_back_to_batt": 100, "soc_cutoff": 0,
         "grid_current": None, "inverter_temp": None, "grid_charge_setting": 0,
+        
+        # Battery Type
         "battery_type_code": None, "battery_type_msg": None,
+        
+        # PERSISTENT ENERGY COUNTERS (Always available)
         "total_pv_energy_kwh": round(energy_data["total_pv_kwh"], 4),
         "total_grid_input_kwh": round(energy_data["total_grid_input_kwh"], 4),
         "total_load_kwh": round(energy_data["total_load_kwh"], 4),
@@ -202,20 +199,30 @@ def inverter_server():
             print("[*] Waiting for Inverter connection...")
             conn, addr = s.accept()
             current_inverter_conn = conn
-            conn.settimeout(5.0) 
+            conn.settimeout(5.0) # Increased timeout for handshake
             print(f"[*] Inverter connected from {addr[0]}:{addr[1]}")
             
+            # =========================================================
+            # === ACTIVE CLOUD EMULATION (Keep v78 Logic for Stability) ===
             try:
+                # 1. Send the Cloud's "Who are you?" command immediately.
+                print("[*] Sending Wake-up Command (AT+DTUPN?)...")
                 conn.send(b'AT+DTUPN?\r\n')
+
+                # 2. Wait for the Dongle to reply with its Serial Number
                 reply = conn.recv(1024)
                 print(f"[*] Dongle replied: {reply.decode(errors='ignore').strip()}")
+                
+                # 3. Brief pause to let the dongle settle before Modbus
                 time.sleep(0.5)
+
             except Exception as e:
                 print(f"[!] Handshake failed: {e}")
                 conn.close()
                 continue
+            # =========================================================
 
-            conn.settimeout(2.5)
+            conn.settimeout(2.5) # Revert to normal Modbus timeout
             consecutive_failures = 0
             
             # === INNER POLLING LOOP ===
@@ -227,8 +234,6 @@ def inverter_server():
                 with modbus_lock:
                     try:
                         flush_buffer(conn) 
-                        
-                        # READ REGISTERS 200 - 240 (40 Registers)
                         conn.send(build_read_packet(200, 40))
                         time.sleep(0.15) 
                         vals = read_modbus_response(conn)
@@ -239,25 +244,24 @@ def inverter_server():
                         else:
                             consecutive_failures = 0
                             
-                            # --- VOLTAGE & PV DATA ---
+                            # --- SENSOR DECODING ---
                             v_batt = vals[15] / 10.0
-                            if v_batt < 10.0: v_batt = 48.0 
+                            if v_batt < 10.0: v_batt = 48.0 # Protection from v89
                             
                             v_pv = vals[19] / 10.0
-                            p_pv = vals[23] 
-                            p_pv_btt = vals[24]
+                            p_pv = vals[23]
+                            p_pv_btt = vals[24] # New sensor from v89
                             v_grid = vals[2] / 10.0
                             p_grid = vals[4]
                             p_load = vals[13]
 
-                            # --- CRITICAL FIX: TRUE BATTERY CURRENT ---
+                            # --- CRITICAL FIX: TRUE BATTERY CURRENT (From v89) ---
                             # Register 232 (Index 32) = Net Battery Current (Solar + Grid - Load)
                             # Register map says: "Positive number means charging"
                             raw_batt_current = to_signed(vals[32])
                             batt_current = raw_batt_current / 10.0
                             
                             # Calculate True Battery Power (Watts)
-                            # P = V * I
                             batt_p = int(batt_current * v_batt)
 
                             # --- ENERGY INTEGRATION ---
@@ -311,7 +315,7 @@ def inverter_server():
                                 "batt_current": batt_current, 
                                 
                                 "pv_input_watt": p_pv, 
-                                "pv_charging_watt": p_pv_btt,
+                                "pv_charging_watt": p_pv_btt, # New
                                 "pv_input_volt": v_pv,
                                 "pv_current": round(p_pv / v_pv, 2) if v_pv > 0 else 0.0,
                                 "temp_dc": vals[27], 
@@ -319,8 +323,9 @@ def inverter_server():
                                 "inverter_temp": vals[26]
                             })
                             
-                            # --- FAULT & WARNING READING ---
+                            # --- FAULT & WARNING READING (Updated logic from v89) ---
                             if loop_counter % 2 == 0:
+                                # Read 12 registers instead of 6 to get warnings
                                 conn.send(build_read_packet(100, 12))
                                 time.sleep(0.1)
                                 vf = read_modbus_response(conn)
@@ -330,8 +335,10 @@ def inverter_server():
                                     f_list = decode_flags(fault_val, FAULT_BIT_MAP, "Unknown F")
                                     w_list = decode_flags(warn_val, WARNING_BIT_MAP, "Unknown W")
                                     latest_data_json.update({
-                                        "fault_code": fault_val, "fault_msg": ", ".join(f_list) if f_list else "No Fault",
-                                        "fault_list": f_list, "warning_code": warn_val,
+                                        "fault_code": fault_val, 
+                                        "fault_msg": ", ".join(f_list) if f_list else "No Fault",
+                                        "fault_list": f_list, 
+                                        "warning_code": warn_val,
                                         "warning_msg": ", ".join(w_list) if w_list else "No Warning",
                                         "warning_list": w_list
                                     })
@@ -368,6 +375,7 @@ def inverter_server():
                                         "soc_cutoff": vsoc[2]
                                     })
                                 
+                                # Keep v78's Battery Type Read
                                 conn.send(build_read_packet(322, 1))
                                 time.sleep(0.1)
                                 v322 = read_modbus_response(conn)
@@ -383,9 +391,11 @@ def inverter_server():
                 loop_counter += 1
                 time.sleep(POLL_INTERVAL)
         except: 
+            print("[!] Connection lost, waiting for reconnect...")
             time.sleep(1)
         finally:
             if current_inverter_conn:
+                print("[!] Inverter disconnected")
                 current_inverter_conn.close()
                 current_inverter_conn = None
             latest_data_json = get_empty_data()
@@ -445,6 +455,7 @@ def control_server():
                 elif req.startswith("SET_RETURN_DEFAULT_"):
                     cmd_packet = build_write_packet(306, int(req.split("_")[3]))
                     latest_data_json["return_to_default"] = int(req.split("_")[3])
+                # NEW V78: Set Battery Type
                 elif req.startswith("SET_BATTERY_TYPE_"):
                     val = int(req.split("_")[3])
                     cmd_packet = build_write_packet(322, val)
