@@ -39,7 +39,7 @@ By hijacking the inverter's network traffic and redirecting it to a local Python
 ### Step 0: Choose Your Hijack Method 🚀
 
 #### Option A: The Router Method (For OpenWRT Users)
-If you have an OpenWRT router, simply add this block to `/etc/config/firewall` to redirect the cloud IP (`8.218.202.213`) to your local bridge.
+If you have an OpenWRT router, simply try to add this block to `/etc/config/firewall` to redirect the cloud IP (`8.218.202.213`) to your local bridge.
 
 **Edit:** `/etc/config/firewall`
 
@@ -64,7 +64,7 @@ config nat 'inverter_snat'
     option target 'MASQUERADE'
 ```
 
-### Option B: The Gateway Method (Stand-alone / High Availability)
+### Option B: The Gateway Method (Stand-alone / (Debian LXC or VM, Raspberry Pi Zero W, etc)
 
 Use this if you don't have an Openwrt router. Disable the build in dhcp server, use Dnsmasq instead (careful about remaining locked out).
 
@@ -963,6 +963,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
