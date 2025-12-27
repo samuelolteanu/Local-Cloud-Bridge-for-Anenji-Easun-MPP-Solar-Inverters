@@ -180,6 +180,18 @@ Add this to your `configuration.yaml`. We use `nc` (Netcat) instead of Python fo
 
 ```yaml
 input_select:
+  inverter_battery_type:
+    name: "Inverter Battery Type"
+    options:
+      - "AGN"
+      - "FLD"
+      - "USR"
+      - "LI2"
+      - "LI4"
+      - "LIb"
+    icon: mdi:battery-sync
+
+
   inverter_buzzer_mode:
     name: "Inverter Buzzer Mode"
     options:
@@ -242,7 +254,15 @@ shell_command:
   set_return_default_off: '/bin/sh -c "echo SET_RETURN_DEFAULT_0 | nc -w 5 192.168.0.105 9999"'
   set_charge_amps_direct: '/bin/sh -c "echo SET_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
   set_total_amps_direct: '/bin/sh -c "echo SET_TOTAL_AMPS_{{ val }} | nc -w 5 192.168.0.105 9999"'
-
+  set_battery_agn: '/bin/sh -c "echo SET_BATTERY_TYPE_0 | nc -w 5 192.168.0.105 9999"'
+  set_battery_fld: '/bin/sh -c "echo SET_BATTERY_TYPE_1 | nc -w 5 192.168.0.105 9999"'
+  set_battery_usr: '/bin/sh -c "echo SET_BATTERY_TYPE_2 | nc -w 5 192.168.0.105 9999"'
+  set_battery_li2: '/bin/sh -c "echo SET_BATTERY_TYPE_4 | nc -w 5 192.168.0.105 9999"'
+  set_battery_li4: '/bin/sh -c "echo SET_BATTERY_TYPE_6 | nc -w 5 192.168.0.105 9999"'
+  set_battery_lib: '/bin/sh -c "echo SET_BATTERY_TYPE_8 | nc -w 5 192.168.0.105 9999"'
+  set_bulk_volt_direct: '/bin/sh -c "echo SET_BULK_VOLT_{{ val }} | nc -w 5 192.168.0.105 9999"'
+  set_float_volt_direct: '/bin/sh -c "echo SET_FLOAT_VOLT_{{ val }} | nc -w 5 192.168.0.105 9999"'
+  set_low_dc_cutoff_direct: '/bin/sh -c "echo SET_LOW_DC_CUTOFF_{{ val }} | nc -w 5 192.168.0.105 9999"'
   
 # --- SENSOR CONFIGURATION ---
 command_line:
@@ -251,12 +271,14 @@ command_line:
       # Using -w 3 ensures it fails/timeouts if bridge is down
       command: 'echo "JSON" | nc -w 3 192.168.0.105 9999' 
       scan_interval: 1
+      # Only mark as "Online" if we actually got valid JSON data
       value_template: >
         {% if value_json is defined %}
           Online
         {% else %}
           Offline
         {% endif %}
+      # If the command fails (exit code 1), the sensor becomes Unavailable automatically.
       json_attributes:
         - fault_msg
         - warning_code
@@ -289,6 +311,7 @@ command_line:
         - ac_out_amp
         - pv_input_volt
         - pv_input_watt
+        - pv_charging_watt
         - inverter_temp
         - batt_power_watt
         - batt_soc
@@ -304,10 +327,53 @@ command_line:
         - total_load_kwh
         - total_battery_charge_kwh
         - total_battery_discharge_kwh
-  
-
+        - battery_type_code
+        - battery_type_msg
+        - bulk_charge_volt
+        - float_charge_volt
+        - low_dc_cutoff_volt
+        
 template:
   - number:
+      - name: "Bulk Charging Voltage"
+        unique_id: bulk_charging_voltage
+        icon: mdi:battery-arrow-up
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'bulk_charge_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_bulk_volt_direct
+          data:
+            val: "{{ value | float }}"
+        min: 48.0
+        max: 58.4
+        step: 0.1
+    
+      - name: "Float Charging Voltage"
+        unique_id: float_charging_voltage
+        icon: mdi:battery-check
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'float_charge_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_float_volt_direct
+          data:
+            val: "{{ value | float }}"
+        min: 48.0
+        max: 58.4
+        step: 0.1
+     
+      - name: "Low DC Cut-off Voltage"
+        unique_id: low_dc_cutoff_voltage
+        icon: mdi:battery-alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'low_dc_cutoff_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        set_value:
+          service: shell_command.set_low_dc_cutoff_direct
+          data:
+            val: "{{ value | float }}"
+        min: 40.0
+        max: 51.9
+        step: 0.1
+        
       - name: "Max Charging Current (Total)"
         unique_id: max_charging_current_total
         icon: mdi:battery-charging-high
@@ -381,6 +447,7 @@ template:
       - name: "Inverter LCD Backlight"
         unique_id: inverter_backlight_switch
         state: "{{ state_attr('sensor.inverter_bridge_data', 'backlight_status') == 1 }}"
+        # This switch becomes Unavailable if the bridge is down
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.set_backlight_on
@@ -391,6 +458,7 @@ template:
       - name: "Grid Charging"
         unique_id: grid_chargingz_template
         state: "{{ state_attr('sensor.inverter_bridge_data', 'charger_priority') | int(default=3) == 2 }}"
+        # This switch becomes Unavailable if the bridge is down
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         turn_on:
           service: shell_command.grid_charge_on
@@ -415,7 +483,8 @@ template:
         device_class: energy
         state_class: total_increasing
         icon: mdi:solar-power
-        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_pv_energy_kwh') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_pv_energy_kwh') |float - 6392 }}"
 
       - name: "Grid Import Energy"
         unique_id: grid_import_energy
@@ -449,6 +518,7 @@ template:
         icon: mdi:battery-minus
         state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_discharge_kwh') }}"
 
+      # 1. Device Status (e.g., "Line Mode", "Battery Mode", "Warning Mode")
       - name: "Inverter Status"
         unique_id: inv_device_status
         icon: mdi:information-outline
@@ -521,6 +591,7 @@ template:
       - name: "Inverter Load Percentage"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_pct') }}"
         unit_of_measurement: "%"
+        unique_id: 840ce89d-721b-47d0-a5c1-1a233fe9c22
         icon: mdi:percent
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         
@@ -536,28 +607,18 @@ template:
         unit_of_measurement: "A"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "PV Charging Power"
+        unique_id: inv_pv_charging_watt
+        unit_of_measurement: "W"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_charging_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
         
       - name: "Battery Current"
         unique_id: inv_batt_current
         unit_of_measurement: "A"
         state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
-
-      - name: "Battery Current (Calibrated)"
-        unique_id: inv_batt_current_calibrated
-        unit_of_measurement: "A"
-        device_class: current
-        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
-        state: >
-          {% set raw_amps = state_attr('sensor.inverter_bridge_data', 'batt_current') %}
-          
-          {# Only calculate if raw_amps is actually a number #}
-          {% if is_number(raw_amps) %}
-            {{ (raw_amps | float * 0.92) | round(1) }}
-          {% else %}
-            None
-          {% endif %}
-        icon: mdi:current-dc
         
       - name: "BMS Battery Percentage"
         unique_id: inv_batt_soc
@@ -573,25 +634,6 @@ template:
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
-      
-      - name: "Battery Power Flow (Calibrated)"
-        unique_id: inv_batt_power_calibrated
-        unit_of_measurement: "W"
-        device_class: power
-        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
-        state: >
-          {% set raw = state_attr('sensor.inverter_bridge_data', 'batt_power_watt') %}
-          {% if is_number(raw) %}
-            {% set raw_f = raw | float %}
-            {% if raw_f < 0 %}
-              {{ (raw_f * 0.86) | round(0) }}
-            {% else %}
-              {{ raw_f }}
-            {% endif %}
-          {% else %}
-            None
-          {% endif %}
-        icon: mdi:battery-charging
 
       - name: "Grid Voltage"
         unique_id: inv_grid_voltage
@@ -634,6 +676,7 @@ template:
         device_class: power
         state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}"
         availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
 
 ```
 
@@ -718,8 +761,54 @@ automations.yaml:
     - conditions: '{{ trigger.to_state.state == ''Fault Only (nd4)'' }}'
       sequence:
         action: shell_command.set_buzzer_fault
-- id: '1765864027241'
+- id: '1766574962308'
+  alias: 'Inverter: Write Battery Type'
+  description: Sends command to inverter when Battery Type dropdown is changed
+  triggers:
+  - entity_id: input_select.inverter_battery_type
+    trigger: state
+  actions:
+  - choose:
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: AGN
+      sequence:
+      - action: shell_command.set_battery_agn
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: FLD
+      sequence:
+      - action: shell_command.set_battery_fld
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: USR
+      sequence:
+      - action: shell_command.set_battery_usr
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LI2
+      sequence:
+      - action: shell_command.set_battery_li2
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LI4
+      sequence:
+      - action: shell_command.set_battery_li4
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LIb
+      sequence:
+      - action: shell_command.set_battery_lib
+  mode: single
+- id: '1766574281444'
   alias: 'Inverter: Sync ALL Settings from Device'
+  description: ''
   triggers:
   - entity_id: sensor.inverter_bridge_data
     trigger: state
@@ -739,8 +828,12 @@ automations.yaml:
         }}'
       soc_cut_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_cutoff'')
         }}'
+      batt_type_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''battery_type_code'')
+        }}'
   - choose:
-    - conditions: '{{ mode_raw is not none }}'
+    - conditions:
+      - condition: template
+        value_template: '{{ mode_raw is not none }}'
       sequence:
       - action: input_select.select_option
         target:
@@ -753,7 +846,9 @@ automations.yaml:
 
             '
   - choose:
-    - conditions: '{{ range_raw is not none }}'
+    - conditions:
+      - condition: template
+        value_template: '{{ range_raw is not none }}'
       sequence:
       - action: input_select.select_option
         target:
@@ -765,7 +860,9 @@ automations.yaml:
 
             '
   - choose:
-    - conditions: '{{ prio_raw is not none }}'
+    - conditions:
+      - condition: template
+        value_template: '{{ prio_raw is not none }}'
       sequence:
       - action: input_select.select_option
         target:
@@ -775,6 +872,21 @@ automations.yaml:
             elif p == 2 %}Solar + Utility (SNU) {% elif p == 3 %}Solar Only (OSO)
             {% else %}{{ states(''input_select.inverter_charger_priority'') }}{% endif
             %}
+
+            '
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ batt_type_raw is not none }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_battery_type
+        data:
+          option: '{% set b = batt_type_raw | int %} {% if b == 0 %}AGN {% elif b
+            == 1 %}FLD {% elif b == 2 %}USR {% elif b == 4 %}LI2 {% elif b == 6 %}LI4
+            {% elif b == 8 %}LIb {% else %}{{ states(''input_select.inverter_battery_type'')
+            }}{% endif %}
 
             '
   mode: single
@@ -794,48 +906,56 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 
 | Register | Function | Unit / Description | Script Variable |
 | :--- | :--- | :--- | :--- |
-| **101** | Fault Code | Numeric Error Code (e.g. 19) | `vals_fault[1]` |
-| **104** | Warning Bitmask 1 | Primary Warnings<br>Bit 6 = Battery Open (bP)<br>Bit 8 = Low Battery (04) | `vals_fault[4]` |
-| **105** | Warning Bitmask 2 | Critical / Hidden Warnings<br>Bit 0 = System Fault (01)<br>Bit 6 = Internal Batt Relay Open (64)<br>Bit 12 = Battery Cutoff / Recovery (4096) | `vals_fault[5]` |
-| **201** | Device Status | 0=Standby, 2=Line, 3=Batt, 1=Fault | `vals[1]` |
+| **100-101** | Fault Code | 32-bit Combined Fault Flags (High/Low) | `vf[0], vf[1]` |
+| **108-109** | Warning Code | 32-bit Combined Warning Flags (High/Low) | `vf[8], vf[9]` |
+| **201** | Device Status | 0=Power On, 1=Standby, 2=Line, 3=Batt, etc. | `vals[1]` |
 | **202** | Grid Voltage | 0.1 V | `vals[2]` |
 | **203** | Grid Frequency | 0.01 Hz | `vals[3]` |
 | **204** | Grid Power | Watts (Power drawn from Grid) | `vals[4]` |
 | **205** | Output Voltage | 0.1 V | `vals[5]` |
-| **208** | Batt Discharge | Signed Int (Net Power) | `vals[8]` |
-| **209** | Batt Charge | **Watts (Charging Only) | `vals[9]` |
 | **211** | Output Current | 0.1 A (Load Amps) | `vals[11]` |
 | **213** | Active Output Power | Watts (Real House Load) | `vals[13]` |
-| **214** | Apparent Output | VA (Volt-Amps)** | `vals[14]` |
+| **214** | Apparent Output | VA (Volt-Amps) | `vals[14]` |
 | **215** | Battery Voltage | 0.1 V | `vals[15]` |
 | **219** | PV Voltage | 0.1 V | `vals[19]` |
-| **223** | PV Power | Watts | `vals[23]` |
+| **223** | PV Input Power | Watts (Total PV) | `vals[23]` |
+| **224** | PV Charging Power | Watts (Solar to Battery) | `vals[24]` |
 | **226** | Inverter Temp | °C | `vals[26]` |
 | **227** | DC/Heatsink Temp | °C | `vals[27]` |
 | **229** | Battery SOC | Percentage % | `vals[29]` |
-| **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB, 4=SUF | `vals_300[0]` |
-| **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `vals_300[1]` |
-| **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `vals_300[2]` |
-| **305** | LCD Backlight | 0=Off, 1=On | `vals_300[4]` |
-| **306** | Auto Return Screen | 0=Disabled, 1=Enabled (LCD Set 19) | `vals_306[0]` |
-| **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `vals_prio[0]` |
-| **333** | Max AC Charge | 0.1 A (e.g. 300 = 30A) | `vals_amps[0]` |
-| **341** | SOC Back to Grid | Percentage % | `vals_soc[0]` |
-| **342** | SOC Back to Batt | Percentage % | `vals_soc[1]` |
-| **343** | SOC Cut-off | Percentage % | `vals_soc[2]` |
+| **232** | Net Battery Current | 0.1 A (Signed: +Charging, -Discharging) | `vals[32]` |
+| **301** | Output Mode | 0=UTI, 1=SOL, 2=SBU, 3=SUB, 4=SUF | `v300[0]` |
+| **302** | AC Input Range | 0=Appliances, 1=UPS, 2=Gen | `v300[1]` |
+| **303** | Buzzer Mode | 0=Mute, 1=Src/Warn/Flt, 2=Warn/Flt, 3=Flt | `v300[2]` |
+| **305** | LCD Backlight | 0=Off, 1=On | `v300[4]` |
+| **306** | Return to Default | 0=Disabled, 1=Enabled | `v300[5]` |
+| **322** | Battery Type | 0=AGN, 1=FLD, 2=USR, 4=LI2, 6=LI4, 8=LIb | `v322[0]` |
+| **324** | Bulk Charge Volt | 0.1 V | `v322[2]` |
+| **325** | Float Charge Volt | 0.1 V | `v322[3]` |
+| **329** | Low DC Cutoff Volt | 0.1 V | `v322[7]` |
+| **331** | Charger Priority | 1=Solar(CSO), 2=Solar+Grid(SNU), 3=Only Solar(OSO) | `v330[0]` |
+| **332** | Max Total Amps | 0.1 A (Total Charging Current) | `v330[1]` |
+| **333** | Max AC Amps | 0.1 A (Grid Charging Current) | `v330[2]` |
+| **341** | SOC Back to Grid | Percentage % | `vsoc[0]` |
+| **342** | SOC Back to Batt | Percentage % | `vsoc[1]` |
+| **343** | SOC Cut-off | Percentage % | `vsoc[2]` |
 
 ### 🧮 Derived Sensors Map
+
 | Sensor | Formula | Unit / Description | Script Variable |
 | :--- | :--- | :--- | :--- |
 | **Grid Current** | `grid_power_watt / grid_volt` | A (Amperes drawn from grid) | `latest_data_json["grid_current"]` |
-| **Battery Current** | `abs(batt_power_watt) / batt_volt` | A (Charge/Discharge current) | `latest_data_json["batt_current"]` |
+| **Battery Current** | `vals[32] / 10.0` | A (Signed Net Current) | `latest_data_json["batt_current"]` |
+| **Battery Power** | `batt_current * batt_volt` | W (Signed Net Power) | `latest_data_json["batt_power_watt"]` |
 | **PV Current** | `pv_input_watt / pv_input_volt` | A (Solar panel current) | `latest_data_json["pv_current"]` |
 | **AC Load Percentage** | `min((ac_load_va / 6200) * 100, 300)` | % (Load relative to rated 6200W) | `latest_data_json["ac_load_pct"]` |
-| **Total PV Energy** | `∫(pv_input_watt * dt) / 3600000` | kWh (Cumulative solar production) | `latest_data_json["total_pv_energy_kwh"]` |
-| **Total Grid Input** | `∫(grid_power_watt * dt) / 3600000` (when grid_power > 0) | kWh (Cumulative grid consumption) | `latest_data_json["total_grid_input_kwh"]` |
-| **Total Load Energy** | `∫(ac_load_real_watt * dt) / 3600000` | kWh (Cumulative household consumption) | `latest_data_json["total_load_kwh"]` |
-| **Total Battery Charge** | `∫(abs(batt_power_watt) * dt) / 3600000` (when batt_power < 0) | kWh (Cumulative energy charged into battery) | `latest_data_json["total_battery_charge_kwh"]` |
-| **Total Battery Discharge** | `∫(batt_power_watt * dt) / 3600000` (when batt_power > 0) | kWh (Cumulative energy discharged from battery) | `latest_data_json["total_battery_discharge_kwh"]` |
+| **Total PV Energy** | `∫(p_pv * dt) / 3600000` | kWh (Cumulative solar production) | `energy_data["total_pv_kwh"]` |
+| **Total Grid Input** | `∫(p_grid * dt) / 3600000` (when p_grid > 0) | kWh (Cumulative grid consumption) | `energy_data["total_grid_input_kwh"]` |
+| **Total Load Energy** | `∫(p_load * dt) / 3600000` | kWh (Cumulative household consumption) | `energy_data["total_load_kwh"]` |
+| **Total Battery Charge** | `∫(batt_p * dt) / 3600000` (when batt_p > 0) | kWh (Cumulative energy charged into battery) | `energy_data["total_battery_charge_kwh"]` |
+| **Total Battery Discharge** | `∫(abs(batt_p) * dt) / 3600000` (when batt_p < 0) | kWh (Cumulative energy discharged from battery) | `energy_data["total_battery_discharge_kwh"]` |
+
+
 ## ⚠️ Disclaimer & Safety Warning
 
 **Use at your own risk.** This project is not affiliated with Anenji, Easun, MPP Solar, or any other manufacturer.
@@ -843,6 +963,7 @@ echo "JSON" | nc -w 1 <bridge ip> 9999
 * **⚡ Active Control Risk:** This bridge now supports **writing settings** to the inverter (Registers 300+). Changing physical parameters like **Max Charging Amps** or **Battery Cut-off Limits** can stress your battery or inverter if set incorrectly. Always verify your battery's datasheet before changing these values in Home Assistant.
 * **🔌 Cloud Disconnection:** By design, this bridge **hijacks** the inverter's network traffic. The official mobile app will permanently show **"Offline"**, and you will **not** receive firmware updates from the manufacturer while this script is running.
 * **🛠️ Expert Use Only:** While the read-logic is safe, the write-logic touches the inverter's internal memory. Do not modify the `shell_command` values in `configuration.yaml` unless you understand the Modbus protocol specific to your device.
+
 
 
 
