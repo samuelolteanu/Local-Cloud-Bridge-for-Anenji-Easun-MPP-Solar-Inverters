@@ -45,7 +45,7 @@ FAULT_BIT_MAP = {
 WARNING_BIT_MAP = {
     0: "W01: Grid Offline", 2: "W02: Temp high", 4: "W04: Low battery",
     7: "W07: Overload", 10: "W10: Power derating", 14: "W14: Fan blocked",
-    15: "W15: PV energy low", 19: "W19: BMS Comms Fail", 21: "W21: BMS Over Current"
+    15: "W15: PV energy low",6: "W06: PV Disconnected", 19: "W19: BMS Comms Fail", 21: "W21: BMS Over Current"
 }
 
 # --- SHARED STATE ---
@@ -131,8 +131,9 @@ def get_empty_data():
         "backlight_status": 1, "soc_back_to_grid": 100, "soc_back_to_batt": 100, "soc_cutoff": 0,
         "grid_current": None, "inverter_temp": None, "grid_charge_setting": 0,
         
-        # Battery Type
+        # Battery Type & Voltages (New v91)
         "battery_type_code": None, "battery_type_msg": None,
+        "bulk_charge_volt": None, "float_charge_volt": None, "low_dc_cutoff_volt": None,
         
         # PERSISTENT ENERGY COUNTERS (Always available)
         "total_pv_energy_kwh": round(energy_data["total_pv_kwh"], 4),
@@ -375,14 +376,21 @@ def inverter_server():
                                         "soc_cutoff": vsoc[2]
                                     })
                                 
-                                # Keep v78's Battery Type Read
-                                conn.send(build_read_packet(322, 1))
+                                # Updated v91: Read Registers 322-329 (Block Read 8)
+                                # 322: Battery Type
+                                # 324: Bulk Volt
+                                # 325: Float Volt
+                                # 329: Cut-off Volt
+                                conn.send(build_read_packet(322, 8))
                                 time.sleep(0.1)
                                 v322 = read_modbus_response(conn)
-                                if v322:
+                                if v322 and len(v322) >= 8:
                                     latest_data_json.update({
                                         "battery_type_code": v322[0],
-                                        "battery_type_msg": BATTERY_TYPE_MAP.get(v322[0], f"Unknown ({v322[0]})")
+                                        "battery_type_msg": BATTERY_TYPE_MAP.get(v322[0], f"Unknown ({v322[0]})"),
+                                        "bulk_charge_volt": v322[2] / 10.0,
+                                        "float_charge_volt": v322[3] / 10.0,
+                                        "low_dc_cutoff_volt": v322[7] / 10.0
                                     })
 
                     except Exception:
@@ -460,6 +468,19 @@ def control_server():
                     val = int(req.split("_")[3])
                     cmd_packet = build_write_packet(322, val)
                     latest_data_json["battery_type_code"] = val
+                # NEW V91: Bulk/Float/Cut-off Voltages
+                elif req.startswith("SET_BULK_VOLT_"):
+                    val = float(req.split("_")[3])
+                    cmd_packet = build_write_packet(324, int(val * 10))
+                    latest_data_json["bulk_charge_volt"] = val
+                elif req.startswith("SET_FLOAT_VOLT_"):
+                    val = float(req.split("_")[3])
+                    cmd_packet = build_write_packet(325, int(val * 10))
+                    latest_data_json["float_charge_volt"] = val
+                elif req.startswith("SET_LOW_DC_CUTOFF_"):
+                    val = float(req.split("_")[4])
+                    cmd_packet = build_write_packet(329, int(val * 10))
+                    latest_data_json["low_dc_cutoff_volt"] = val
                 
                 if cmd_packet:
                     with modbus_lock:
