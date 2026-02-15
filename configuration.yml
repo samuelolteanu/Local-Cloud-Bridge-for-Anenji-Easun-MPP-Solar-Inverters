@@ -1,0 +1,562 @@
+input_select:
+  inverter_battery_type:
+    name: "Inverter Battery Type"
+    options:
+      - "AGN"
+      - "FLD"
+      - "USR"
+      - "LI2"
+      - "LI4"
+      - "LIb"
+    icon: mdi:battery-sync
+
+
+  inverter_buzzer_mode:
+    name: "Inverter Buzzer Mode"
+    options:
+      - "Mute (nd1)"
+      - "Source/Warn/Fault (nd2)"
+      - "Warn/Fault (nd3)"
+      - "Fault Only (nd4)"
+    icon: mdi:volume-high
+
+  inverter_ac_range:
+    name: "AC Input Range"
+    options:
+      - "Appliances (APL)"
+      - "UPS (UPS)"
+      - "Generator (GEN)"
+    icon: mdi:sine-wave
+
+  inverter_mode:
+    name: Inverter Output Source Priority
+    options:
+      - "Utility First (UTI)"
+      - "Solar First (SOL)"
+      - "SBU (Solar-Batt-Util)"
+      - "SUB (Solar-Util-Batt)"
+      - "SUF (GRID Feedback)"
+    icon: mdi:source-branch
+
+  inverter_charger_priority:
+    name: Charger Source Priority
+    options:
+      - "Solar First (CSO)"
+      - "Solar + Utility (SNU)"
+      - "Solar Only (OSO)"
+    icon: mdi:battery-charging
+
+#--- CONTROL LOGIC ---
+shell_command:
+  set_inverter_uti: '/bin/sh -c "echo MODE_0 | nc -w 5 192.168.0.100 9999"'
+  set_inverter_sol: '/bin/sh -c "echo MODE_1 | nc -w 5 192.168.0.100 9999"'
+  set_inverter_sbu: '/bin/sh -c "echo MODE_2 | nc -w 5 192.168.0.100 9999"'
+  set_inverter_sub: '/bin/sh -c "echo MODE_3 | nc -w 5 192.168.0.100 9999"'
+  set_inverter_suf: '/bin/sh -c "echo MODE_4 | nc -w 5 192.168.0.100 9999"'
+  set_charger_cso: '/bin/sh -c "echo CSO_SET | nc -w 5 192.168.0.100 9999"'
+  set_charger_snu: '/bin/sh -c "echo SNU_SET | nc -w 5 192.168.0.100 9999"'
+  set_charger_oso: '/bin/sh -c "echo OSO_SET | nc -w 5 192.168.0.100 9999"'
+  set_soc_grid_direct: '/bin/sh -c "echo SET_SOC_GRID_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_soc_batt_direct: '/bin/sh -c "echo SET_SOC_BATT_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_soc_cutoff_direct: '/bin/sh -c "echo SET_SOC_CUTOFF_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_ac_range: >
+    /bin/sh -c "echo SET_AC_RANGE_{% if is_state('input_select.inverter_ac_range', 'Appliances (APL)') %}0{% elif is_state('input_select.inverter_ac_range', 'UPS (UPS)') %}1{% else %}2{% endif %} | nc -w 5 192.168.0.100 9999"
+  set_buzzer_mute: '/bin/sh -c "echo SET_BUZZER_0 | nc -w 5 192.168.0.100 9999"'
+  set_buzzer_nd2: '/bin/sh -c "echo SET_BUZZER_1 | nc -w 5 192.168.0.100 9999"'
+  set_buzzer_nd3: '/bin/sh -c "echo SET_BUZZER_2 | nc -w 5 192.168.0.100 9999"'
+  set_buzzer_fault: '/bin/sh -c "echo SET_BUZZER_3 | nc -w 5 192.168.0.100 9999"'
+  set_backlight_on: '/bin/sh -c "echo SET_BACKLIGHT_1 | nc -w 5 192.168.0.100 9999"'
+  set_backlight_off: '/bin/sh -c "echo SET_BACKLIGHT_0 | nc -w 5 192.168.0.100 9999"'
+  grid_charge_on: '/bin/sh -c "echo CHARGE_ON | nc -w 5 192.168.0.100 9999"'
+  grid_charge_off: '/bin/sh -c "echo CHARGE_OFF | nc -w 5 192.168.0.100 9999"'
+  set_return_default_on: '/bin/sh -c "echo SET_RETURN_DEFAULT_1 | nc -w 5 192.168.0.100 9999"'
+  set_return_default_off: '/bin/sh -c "echo SET_RETURN_DEFAULT_0 | nc -w 5 192.168.0.100 9999"'
+  set_charge_amps_direct: '/bin/sh -c "echo SET_AMPS_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_total_amps_direct: '/bin/sh -c "echo SET_TOTAL_AMPS_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_battery_agn: '/bin/sh -c "echo SET_BATTERY_TYPE_0 | nc -w 5 192.168.0.100 9999"'
+  set_battery_fld: '/bin/sh -c "echo SET_BATTERY_TYPE_1 | nc -w 5 192.168.0.100 9999"'
+  set_battery_usr: '/bin/sh -c "echo SET_BATTERY_TYPE_2 | nc -w 5 192.168.0.100 9999"'
+  set_battery_li2: '/bin/sh -c "echo SET_BATTERY_TYPE_4 | nc -w 5 192.168.0.100 9999"'
+  set_battery_li4: '/bin/sh -c "echo SET_BATTERY_TYPE_6 | nc -w 5 192.168.0.100 9999"'
+  set_battery_lib: '/bin/sh -c "echo SET_BATTERY_TYPE_8 | nc -w 5 192.168.0.100 9999"'
+  set_bulk_volt_direct: '/bin/sh -c "echo SET_BULK_VOLT_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_float_volt_direct: '/bin/sh -c "echo SET_FLOAT_VOLT_{{ val }} | nc -w 5 192.168.0.100 9999"'
+  set_low_dc_cutoff_direct: '/bin/sh -c "echo SET_LOW_DC_CUTOFF_{{ val }} | nc -w 5 192.168.0.100 9999"'
+
+# --- SENSOR CONFIGURATION ---
+command_line:
+  - sensor:
+      name: "Inverter Bridge Data"
+      # Using -w 3 ensures it fails/timeouts if bridge is down
+      command: 'echo "JSON" | nc -w 3 192.168.0.100 9999'
+      scan_interval: 5
+      # Only mark as "Online" if we actually got valid JSON data
+      value_template: >
+        {% if value_json is defined %}
+          Online
+        {% else %}
+          Offline
+        {% endif %}
+      # If the command fails (exit code 1), the sensor becomes Unavailable automatically.
+      json_attributes:
+        - fault_msg
+        - warning_code
+        - warning_msg
+        - device_status_msg
+        - device_status_code
+        - fault_code
+        - fault_bitmask
+        - warning_bitmask
+        - return_to_default
+        - ac_output_amp
+        - ac_load_real_watt
+        - ac_load_va
+        - grid_current
+        - buzzer_mode
+        - backlight_status
+        - ac_input_range
+        - max_total_amps
+        - max_ac_amps
+        - temp_dc
+        - temp_inv
+        - ac_load_pct
+        - charger_priority
+        - output_mode
+        - grid_charge_setting
+        - grid_volt
+        - batt_volt
+        - ac_load_watt
+        - ac_out_volt
+        - ac_out_amp
+        - pv_input_volt
+        - pv_input_watt
+        - pv_charging_watt
+        - inverter_temp
+        - batt_power_watt
+        - batt_soc
+        - batt_current
+        - pv_current
+        - grid_power_watt
+        - soc_back_to_grid
+        - soc_back_to_batt
+        - soc_cutoff
+        - grid_freq
+        - total_pv_energy_kwh
+        - total_grid_input_kwh
+        - total_load_kwh
+        - total_battery_charge_kwh
+        - total_battery_discharge_kwh
+        - battery_type_code
+        - battery_type_msg
+        - bulk_charge_volt
+        - float_charge_volt
+        - low_dc_cutoff_volt
+
+# --- UTILITY METERS FOR DAILY/MONTHLY TRACKING ---
+utility_meter:
+  solar_daily:
+    source: sensor.solar_energy
+    cycle: daily
+
+  solar_monthly:
+    source: sensor.solar_energy
+    cycle: monthly
+
+  grid_import_daily:
+    source: sensor.grid_import_energy
+    cycle: daily
+
+  grid_import_monthly:
+    source: sensor.grid_import_energy
+    cycle: monthly
+
+  house_load_daily:
+    source: sensor.house_load_energy
+    cycle: daily
+
+  house_load_monthly:
+    source: sensor.house_load_energy
+    cycle: monthly
+
+  battery_charge_daily:
+    source: sensor.battery_charge_energy
+    cycle: daily
+
+  battery_charge_monthly:
+    source: sensor.battery_charge_energy
+    cycle: monthly
+
+  battery_discharge_daily:
+    source: sensor.battery_discharge_energy
+    cycle: daily
+
+  battery_discharge_monthly:
+    source: sensor.battery_discharge_energy
+    cycle: monthly
+
+template:
+  - number:
+      - name: "Bulk Charging Voltage"
+        unique_id: bulk_charging_voltage
+        icon: mdi:battery-arrow-up
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'bulk_charge_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'bulk_charge_volt') is not none }}"
+        set_value:
+          service: shell_command.set_bulk_volt_direct
+          data:
+            val: "{{ value | float }}"
+        min: 48.0
+        max: 58.4
+        step: 0.1
+
+      - name: "Float Charging Voltage"
+        unique_id: float_charging_voltage
+        icon: mdi:battery-check
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'float_charge_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'float_charge_volt') is not none }}"
+        set_value:
+          service: shell_command.set_float_volt_direct
+          data:
+            val: "{{ value | float }}"
+        min: 48.0
+        max: 58.4
+        step: 0.1
+
+      - name: "Low DC Cut-off Voltage"
+        unique_id: low_dc_cutoff_voltage
+        icon: mdi:battery-alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'low_dc_cutoff_volt') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'low_dc_cutoff_volt') is not none }}"
+        set_value:
+          service: shell_command.set_low_dc_cutoff_direct
+          data:
+            val: "{{ value | float }}"
+        min: 40.0
+        max: 51.9
+        step: 0.1
+
+      - name: "Max Charging Current (Total)"
+        unique_id: max_charging_current_total
+        icon: mdi:battery-charging-high
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'max_total_amps') | float(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'max_total_amps') is not none }}"
+        set_value:
+          service: shell_command.set_total_amps_direct
+          data:
+            val: "{{ value | int }}"
+        min: 10
+        max: 120
+        step: 1
+
+      - name: "Max AC Charge Amps"
+        unique_id: num_max_ac_amps
+        min: 5
+        max: 80
+        step: 1
+        unit_of_measurement: "A"
+        icon: mdi:current-ac
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'max_ac_amps') | int(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'max_ac_amps') is not none }}"
+        set_value:
+          service: shell_command.set_charge_amps_direct
+          data:
+            val: "{{ value | int }}"
+
+      - name: "Back to Grid SOC (Prg 43)"
+        unique_id: num_soc_grid
+        min: 4
+        max: 50
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-arrow-down
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') | int(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'soc_back_to_grid') is not none }}"
+        set_value:
+          service: shell_command.set_soc_grid_direct
+          data:
+            val: "{{ value | int }}"
+
+      - name: "Back to Battery SOC (Prg 44)"
+        unique_id: num_soc_batt
+        min: 60
+        max: 100
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-arrow-up
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') | int(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'soc_back_to_batt') is not none }}"
+        set_value:
+          service: shell_command.set_soc_batt_direct
+          data:
+            val: "{{ value | int }}"
+
+      - name: "Cut-off SOC (Prg 45)"
+        unique_id: num_soc_cutoff
+        min: 3
+        max: 30
+        step: 1
+        unit_of_measurement: "%"
+        icon: mdi:battery-alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'soc_cutoff') | int(0) }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'soc_cutoff') is not none }}"
+        set_value:
+          service: shell_command.set_soc_cutoff_direct
+          data:
+            val: "{{ value | int }}"
+
+  - switch:
+      - name: "Inverter LCD Backlight"
+        unique_id: inverter_backlight_switch
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'backlight_status') == 1 }}"
+        # This switch becomes Unavailable if the bridge is down
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        turn_on:
+          service: shell_command.set_backlight_on
+        turn_off:
+          service: shell_command.set_backlight_off
+        icon: mdi:monitor-shimmer
+
+      - name: "Grid Charging"
+        unique_id: grid_chargingz_template
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'charger_priority') | int(default=3) == 2 }}"
+        # This switch becomes Unavailable if the bridge is down
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        turn_on:
+          service: shell_command.grid_charge_on
+        turn_off:
+          service: shell_command.grid_charge_off
+        icon: mdi:flash
+
+      - name: "Inverter Return to Default Screen"
+        unique_id: inverter_return_default_switch
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'return_to_default') == 1 }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        turn_on:
+          service: shell_command.set_return_default_on
+        turn_off:
+          service: shell_command.set_return_default_off
+        icon: mdi:arrow-u-left-top
+
+  - sensor:
+      - name: "Solar Energy"
+        unique_id: solar_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:solar-power
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_pv_energy_kwh') |float - 6392 }}"
+
+      - name: "Grid Import Energy"
+        unique_id: grid_import_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:transmission-tower
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'total_grid_input_kwh') is not none }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_grid_input_kwh') }}"
+
+      - name: "House Load Energy"
+        unique_id: house_load_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:home-lightning-bolt
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'total_load_kwh') is not none }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_load_kwh') }}"
+
+      - name: "Battery Charge Energy"
+        unique_id: battery_charge_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:battery-charging
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'total_battery_charge_kwh') is not none }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_charge_kwh') }}"
+
+      - name: "Battery Discharge Energy"
+        unique_id: battery_discharge_energy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:battery-minus
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' and state_attr('sensor.inverter_bridge_data', 'total_battery_discharge_kwh') is not none }}"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'total_battery_discharge_kwh') }}"
+
+      # 1. Device Status (e.g., "Line Mode", "Battery Mode", "Warning Mode")
+      - name: "Inverter Status"
+        unique_id: inv_device_status
+        icon: mdi:information-outline
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'device_status_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      # 2. Fault/Error Message (e.g., "No Fault", "Inverter current offset is too high")
+      # This is for CRITICAL errors that stop the machine.
+      - name: "Inverter Fault Message"
+        unique_id: inv_fault_msg
+        icon: mdi:alert-circle
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'fault_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      # 3. Warning Message (e.g., "No Warning", "BMS Communication Fail")
+      # This is for ALERTS where the machine keeps running (Status 4).
+      - name: "Inverter Warning Message"
+        unique_id: inv_warning_msg
+        icon: mdi:alert
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'warning_msg') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "House Load Apparent Power"
+        unique_id: inv_load_apparent_power
+        unit_of_measurement: "VA"
+        device_class: apparent_power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_va')}}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        icon: mdi:flash-outline
+
+      - name: "House Load Power"
+        unique_id: inv_house_load_watts
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt')}}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Output Power Factor"
+        unique_id: inv_output_pf
+        unit_of_measurement: "PF"
+        state_class: measurement
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+        state: >
+          {% set real = state_attr('sensor.inverter_bridge_data', 'ac_load_real_watt') %}
+          {% set va = state_attr('sensor.inverter_bridge_data', 'ac_load_va') %}
+          {% if is_number(real) and is_number(va) %}
+            {% if va | float > 0 %}
+              {{ (real | float / va | float) | round(2) }}
+            {% else %}
+              1.0
+            {% endif %}
+          {% else %}
+            None
+          {% endif %}
+
+      - name: "Inverter Temp (DC)"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'temp_dc') }}"
+        unit_of_measurement: "°C"
+        unique_id: inv_dc_temp
+        device_class: temperature
+        state_class: measurement
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Inverter Temp (AC)"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'temp_inv') }}"
+        unit_of_measurement: "°C"
+        unique_id: inv_ac_temp
+        device_class: temperature
+        state_class: measurement
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Inverter Load Percentage"
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_load_pct') }}"
+        unit_of_measurement: "%"
+        unique_id: 840ce89d-721b-47d0-a5c1-1a233fe9c22
+        state_class: measurement
+        icon: mdi:percent
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Grid Input Power"
+        unique_id: inv_grid_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_power_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "PV Current"
+        unique_id: inv_pv_current
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_current') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "PV Charging Power"
+        unique_id: inv_pv_charging_watt
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_charging_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Battery Current"
+        unique_id: inv_batt_current
+        unit_of_measurement: "A"
+        device_class: current
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_current') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "BMS Battery Percentage"
+        unique_id: inv_batt_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_soc') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Battery Power Flow"
+        unique_id: inv_batt_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_power_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Grid Voltage"
+        unique_id: inv_grid_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Grid Frequency"
+        unique_id: inv_grid_freq
+        unit_of_measurement: "Hz"
+        device_class: frequency
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'grid_freq') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Output Voltage"
+        unique_id: inv_out_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'ac_out_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "Battery Voltage (Inverter)"
+        unique_id: inv_batt_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'batt_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "PV Input Voltage"
+        unique_id: inv_pv_voltage
+        unit_of_measurement: "V"
+        device_class: voltage
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_volt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
+
+      - name: "PV Input Power"
+        unique_id: inv_pv_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: "{{ state_attr('sensor.inverter_bridge_data', 'pv_input_watt') }}"
+        availability: "{{ states('sensor.inverter_bridge_data') == 'Online' }}"
