@@ -118,23 +118,27 @@ def save_energy_to_disk():
 def get_empty_data():
     """Initializes sensors to None, energy sensors always available."""
     data = {
+        # Real-time measurements → None on disconnect (HA marks unavailable)
         "fault_code": 0, "fault_msg": "No Fault", "fault_list": [],
         "warning_code": 0, "warning_msg": "No Warning", "warning_list": [],
-        "device_status_code": None, "device_status_msg": "Initializing...", 
+        "device_status_code": None, "device_status_msg": "Initializing...",
         "batt_volt": None, "ac_load_va": None, "ac_load_real_watt": None, "ac_load_pct": None,
         "batt_power_watt": None, "grid_power_watt": None, "ac_output_amp": None, "pv_input_watt": None,
-        "pv_charging_watt": None, # New Sensor
+        "pv_charging_watt": None,
         "pv_input_volt": None, "pv_current": None, "batt_soc": None, "temp_dc": None, "temp_inv": None,
-        "max_total_amps": None, "max_ac_amps": None, "batt_current": None, "grid_volt": None,
-        "grid_freq": None, "ac_out_volt": None, "ac_out_amp": None, "return_to_default": 0,
-        "charger_priority": 3, "output_mode": 0, "ac_input_range": 0, "buzzer_mode": 3,
-        "backlight_status": 1, "soc_back_to_grid": 100, "soc_back_to_batt": 100, "soc_cutoff": 0,
-        "grid_current": None, "inverter_temp": None, "grid_charge_setting": 0,
-        
-        # Battery Type & Voltages (New v91)
+        "batt_current": None, "grid_volt": None,
+        "grid_freq": None, "ac_out_volt": None, "ac_out_amp": None,
+        "grid_current": None, "inverter_temp": None,
+
+        # Settings → None on disconnect (not hardcoded defaults that HA would treat as real)
+        "max_total_amps": None, "max_ac_amps": None,
+        "return_to_default": None, "charger_priority": None, "output_mode": None,
+        "ac_input_range": None, "buzzer_mode": None, "backlight_status": None,
+        "soc_back_to_grid": None, "soc_back_to_batt": None, "soc_cutoff": None,
+        "grid_charge_setting": None,
         "battery_type_code": None, "battery_type_msg": None,
         "bulk_charge_volt": None, "float_charge_volt": None, "low_dc_cutoff_volt": None,
-        
+
         # PERSISTENT ENERGY COUNTERS (Always available)
         "total_pv_energy_kwh": round(energy_data["total_pv_kwh"], 4),
         "total_grid_input_kwh": round(energy_data["total_grid_input_kwh"], 4),
@@ -225,7 +229,8 @@ def inverter_server():
 
             conn.settimeout(2.5) # Revert to normal Modbus timeout
             consecutive_failures = 0
-            
+            loop_counter = 0  # Reset so settings are read immediately on reconnect
+
             # === INNER POLLING LOOP ===
             while True:
                 now = time.time()
@@ -398,12 +403,12 @@ def inverter_server():
                         if consecutive_failures >= OFFLINE_THRESHOLD: break
                 loop_counter += 1
                 time.sleep(POLL_INTERVAL)
-        except: 
-            print("[!] Connection lost, waiting for reconnect...")
+        except Exception as e:
+            print(f"[!] Connection lost ({e}), waiting for reconnect...")
             time.sleep(1)
         finally:
             if current_inverter_conn:
-                print("[!] Inverter disconnected")
+                print(f"[!] Inverter disconnected (after {loop_counter} loops, {consecutive_failures} failures)")
                 current_inverter_conn.close()
                 current_inverter_conn = None
             latest_data_json = get_empty_data()
@@ -417,8 +422,8 @@ def control_server():
     while True:
         try:
             client, _ = s.accept()
-            req = client.recv(1024).strip().decode().upper()
-            if req == "JSON":
+            req = client.recv(1024).strip().decode()
+            if req.upper() == "JSON":
                 client.send(json.dumps(latest_data_json).encode())
             elif current_inverter_conn and req:
                 cmd_packet = None

@@ -1,0 +1,218 @@
+- id: '1765747246000'
+  alias: 'Inverter: Set Priority Mode'
+  triggers:
+  - entity_id: input_select.inverter_mode
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
+  actions:
+  - choose:
+    - conditions: '{{ trigger.to_state.state == ''Utility First (UTI)'' }}'
+      sequence:
+      - action: shell_command.set_inverter_uti
+    - conditions: '{{ trigger.to_state.state == ''Solar First (SOL)'' }}'
+      sequence:
+      - action: shell_command.set_inverter_sol
+    - conditions: '{{ trigger.to_state.state == ''SBU (Solar-Batt-Util)'' }}'
+      sequence:
+      - action: shell_command.set_inverter_sbu
+    - conditions: '{{ trigger.to_state.state == ''SUB (Solar-Util-Batt)'' }}'
+      sequence:
+      - action: shell_command.set_inverter_sub
+    - conditions: '{{ trigger.to_state.state == ''SUF (GRID Feedback)'' }}'
+      sequence:
+      - action: shell_command.set_inverter_suf
+  mode: restart
+- id: '1765777872842'
+  alias: 'Inverter: Set Charger Priority'
+  triggers:
+  - entity_id: input_select.inverter_charger_priority
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
+  actions:
+  - choose:
+    - conditions: '{{ trigger.to_state.state == ''Solar First (CSO)'' }}'
+      sequence:
+      - action: shell_command.set_charger_cso
+    - conditions: '{{ trigger.to_state.state == ''Solar + Utility (SNU)'' }}'
+      sequence:
+      - action: shell_command.set_charger_snu
+    - conditions: '{{ trigger.to_state.state == ''Solar Only (OSO)'' }}'
+      sequence:
+      - action: shell_command.set_charger_oso
+  mode: single
+- id: '1765823166092'
+  alias: 'Inverter: Set AC Range'
+  triggers:
+  - entity_id: input_select.inverter_ac_range
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
+  actions:
+  - action: shell_command.set_ac_range
+- id: '1765863406672'
+  alias: 'Inverter: Set Buzzer Mode'
+  triggers:
+  - entity_id: input_select.inverter_buzzer_mode
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
+  actions:
+  - choose:
+    - conditions: '{{ trigger.to_state.state == ''Mute (nd1)'' }}'
+      sequence:
+        action: shell_command.set_buzzer_mute
+    - conditions: '{{ trigger.to_state.state == ''Source/Warn/Fault (nd2)'' }}'
+      sequence:
+        action: shell_command.set_buzzer_nd2
+    - conditions: '{{ trigger.to_state.state == ''Warn/Fault (nd3)'' }}'
+      sequence:
+        action: shell_command.set_buzzer_nd3
+    - conditions: '{{ trigger.to_state.state == ''Fault Only (nd4)'' }}'
+      sequence:
+        action: shell_command.set_buzzer_fault
+- id: '1766574962308'
+  alias: 'Inverter: Write Battery Type'
+  description: Sends command to inverter when Battery Type dropdown is changed
+  triggers:
+  - entity_id: input_select.inverter_battery_type
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: '{{ trigger.to_state.context.user_id != None }}'
+  actions:
+  - choose:
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: AGN
+      sequence:
+      - action: shell_command.set_battery_agn
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: FLD
+      sequence:
+      - action: shell_command.set_battery_fld
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: USR
+      sequence:
+      - action: shell_command.set_battery_usr
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LI2
+      sequence:
+      - action: shell_command.set_battery_li2
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LI4
+      sequence:
+      - action: shell_command.set_battery_li4
+    - conditions:
+      - condition: state
+        entity_id: input_select.inverter_battery_type
+        state: LIb
+      sequence:
+      - action: shell_command.set_battery_lib
+  mode: single
+- id: '1766574281444'
+  alias: 'Inverter: Sync ALL Settings from Device'
+  description: ''
+  triggers:
+  - entity_id: sensor.inverter_bridge_data
+    trigger: state
+  actions:
+  - variables:
+      mode_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''output_mode'') }}'
+      range_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''ac_input_range'')
+        }}'
+      prio_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''charger_priority'')
+        }}'
+      buzzer_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''buzzer_mode'')
+        }}'
+      amps_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''max_ac_amps'') }}'
+      soc_grid_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_back_to_grid'')
+        }}'
+      soc_batt_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_back_to_batt'')
+        }}'
+      soc_cut_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''soc_cutoff'')
+        }}'
+      batt_type_raw: '{{ state_attr(''sensor.inverter_bridge_data'', ''battery_type_code'')
+        }}'
+  - variables:
+      mode_option: >-
+        {% set m = mode_raw | int %}
+        {% if m == 0 %}Utility First (UTI)
+        {% elif m == 1 %}Solar First (SOL)
+        {% elif m == 2 %}SBU (Solar-Batt-Util)
+        {% elif m == 3 %}SUB (Solar-Util-Batt)
+        {% elif m == 4 %}SUF (GRID Feedback)
+        {% else %}{{ states('input_select.inverter_mode') }}{% endif %}
+      range_option: >-
+        {% set r = range_raw | int %}
+        {% if r == 0 %}Appliances (APL)
+        {% elif r == 1 %}UPS (UPS)
+        {% elif r == 2 %}Generator (GEN)
+        {% else %}{{ states('input_select.inverter_ac_range') }}{% endif %}
+      prio_option: >-
+        {% set p = prio_raw | int %}
+        {% if p == 1 %}Solar First (CSO)
+        {% elif p == 2 %}Solar + Utility (SNU)
+        {% elif p == 3 %}Solar Only (OSO)
+        {% else %}{{ states('input_select.inverter_charger_priority') }}{% endif %}
+      batt_type_option: >-
+        {% set b = batt_type_raw | int %}
+        {% if b == 0 %}AGN{% elif b == 1 %}FLD{% elif b == 2 %}USR
+        {% elif b == 4 %}LI2{% elif b == 6 %}LI4{% elif b == 8 %}LIb
+        {% else %}{{ states('input_select.inverter_battery_type') }}{% endif %}
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ mode_raw is not none and mode_option | trim != states(''input_select.inverter_mode'') }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_mode
+        data:
+          option: '{{ mode_option | trim }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ range_raw is not none and range_option | trim != states(''input_select.inverter_ac_range'') }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_ac_range
+        data:
+          option: '{{ range_option | trim }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ prio_raw is not none and prio_option | trim != states(''input_select.inverter_charger_priority'') }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_charger_priority
+        data:
+          option: '{{ prio_option | trim }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ batt_type_raw is not none and batt_type_option | trim != states(''input_select.inverter_battery_type'') }}'
+      sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.inverter_battery_type
+        data:
+          option: '{{ batt_type_option | trim }}'
+  mode: single
+  max_exceeded: silent
