@@ -1,4 +1,5 @@
 # Unified Solar MQTT Bridge & Web LCD (Anenji / Easun / Voltronic / Sumry)
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/5eae6682-2b1c-4c1a-a659-9e12754bddf8" />
 
 **Cloud-optional by design. Sub-second local telemetry, native Home Assistant MQTT Discovery, and a live Web LCD for hybrid solar inverters.**
 
