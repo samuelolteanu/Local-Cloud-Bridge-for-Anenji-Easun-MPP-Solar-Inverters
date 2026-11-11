@@ -1,5 +1,7 @@
+
+<img width="1366" height="768" alt="Screenshot (49)" src="https://github.com/user-attachments/assets/21994c04-a03b-4cf6-a89d-85ff5c64cf13" />
+
 # Unified Solar MQTT Bridge & Web LCD (Anenji / Easun / Voltronic / Sumry)
-<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/5eae6682-2b1c-4c1a-a659-9e12754bddf8" />
 
 **Cloud-optional by design. Sub-second local telemetry, native Home Assistant MQTT Discovery, and a live Web LCD for hybrid solar inverters.**
 
@@ -19,7 +21,9 @@ Version 43 unifies two distinct hardware architectures into a single multi-threa
 
   * Animated proportional power flow lines, dynamic AC bypass routing, HVDC bus boxes, solar ray gauges, and load/grid wedges.
 
-  * Multi-inverter **Main + Island** topology view with real-time 48V DC bus cross-transfer indicators (`▲` / `▼` Watts between inverters) and kWh pulse LEDs.
+  * Multi-inverter **Main + Island** topology view with real-time 48V DC bus cross-transfer indicators (`▲` / `▼` Watts between inverters).
+
+  * **1000 imp/kWh Utility-Meter Pulse LEDs:** The `AC/INV` and `CHG` status LEDs under the LCD bezel act as real-time optical energy meter pulse indicators, flashing once for every **1 Wh** ($1000\text{ pulses/kWh}$) of inverting or charging energy accumulated.
 
   * **DPI Scaling & Fullscreen Kiosk Mode (`?kiosk=1`):** Fine-tune text, icon, box, and line scaling in browser `localStorage`, or double-click to toggle dedicated wall-tablet display mode.
 
@@ -37,7 +41,7 @@ Version 43 unifies two distinct hardware architectures into a single multi-threa
 
 ## 🔌 First Connection & Hardware Setup
 
-You can run a single inverter or a combined **Main (Grid-tied/Hybrid) + Island (Off-Grid)** dual-inverter setup.
+You can run a single inverter or a combined **Main (Grid-tied/Hybrid) + Island (Off-Grid)** dual-inverter setup sharing a common 48V battery bank.
 
 ### 1. Anenji / Sumry (Wi-Fi Dongle TCP Redirection)
 
@@ -69,7 +73,6 @@ config nat 'inverter_snat'
     option dest_ip '192.168.0.105'
     option dest_port '18899'
     option target 'MASQUERADE'
-
 ```
 
 #### Option B: Gateway Interception via Linux / Proxmox LXC (`dnsmasq` + `iptables`)
@@ -80,7 +83,6 @@ If your main ISP router does not support custom DNAT rules, configure your Linux
 
 ```
 apt update && apt install dnsmasq iptables-persistent -y
-
 ```
 
 2. **Configure `/etc/dnsmasq.conf`** (disable your router's built-in DHCP first):
@@ -100,7 +102,6 @@ dhcp-host=AA:BB:CC:DD:EE:FF,192.168.0.111,Solar-Inverter,set:solar_inverter
 
 # Push the Bridge Server (.105) as the Default Gateway ONLY for the inverter
 dhcp-option=tag:solar_inverter,3,192.168.0.105
-
 ```
 
 3. **Apply `iptables` Port Redirection & WAN Block:**
@@ -118,7 +119,6 @@ iptables -A FORWARD -s 192.168.0.111 -j DROP
 
 # Persist across reboots
 netfilter-persistent save
-
 ```
 
 *(Tip: Power-cycle the Wi-Fi dongle or restart your router's Wi-Fi AP after applying DHCP/NAT rules so the dongle immediately establishes a new TCP session to the local bridge).*
@@ -132,21 +132,18 @@ For Voltronic/Axpert-based inverters (such as the **Easun ISolar SML II 5.5kW**)
 ```
 # Check your USB adapter's idVendor and idProduct (commonly 1a86:7523 for CH340 or 067b:2303 for PL2303)
 lsusb
-
 ```
 
 Create `/etc/udev/rules.d/99-solar-serial.rules`:
 
 ```
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="easun-rs485", MODE="0666"
-
 ```
 
 Reload `udev`:
 
 ```
 udevadm control --reload-rules && udevadm trigger
-
 ```
 
 *(If running inside a Proxmox LXC container, pass the `/dev/easun-rs485` or `/dev/ttyUSB*` device node through to the container).*
@@ -157,7 +154,6 @@ udevadm control --reload-rules && udevadm trigger
 
 ```
 apt update && apt install python3 python3-paho-mqtt python3-serial -y
-
 ```
 
 *(Note: Requires `paho-mqtt >= 2.0.0` using `CallbackAPIVersion.VERSION2`. If your distro ships an older apt package, install via `pip3 install paho-mqtt pyserial --break-system-packages`).*
@@ -182,7 +178,6 @@ User=root
 
 [Install]
 WantedBy=multi-user.target
-
 ```
 
 Enable and start the service:
@@ -190,7 +185,6 @@ Enable and start the service:
 ```
 systemctl daemon-reload
 systemctl enable --now inverter-bridge
-
 ```
 
 ## ⚙️ Configuration & Web UI (`:8080`)
@@ -252,7 +246,6 @@ You can edit `/root/bridge_config.json` directly from the Web UI form at the bot
     }
   ]
 }
-
 ```
 
 ## 🏠 Home Assistant Integration (MQTT Auto-Discovery)
@@ -325,9 +318,12 @@ As soon as the bridge connects to your MQTT broker, both inverters appear under 
 | **`QPIWS`** | Hardware Fault Bits | 32-bit fault string (`Bus Over Volt`, `Overload`, `Over Temp`, `Fan Locked`, etc.) | 
 | **Write Cmds** | Parameter Writes | `POP00..02` (Output Mode), `PCP00..03` (Charger Priority), `PGR00..01` (AC Range), `PBT00..02` (Battery Type), `V220..240` (Output Volt), `PCVV` (Bulk V), `PBFT` (Float V), `PSDV` (Cutoff V), `PBCV` (Back to Grid V), `PBDV` (Back to Batt V), `MCHGC` / `MNCHGC0` (Max Total Amps), `MUCHGC` (Max AC Amps), `PE`/`PD` + `a/b/k/x` (Switches) | 
 
-## ⚠️ Disclaimer & Hardware Safety
+## ⚠️ Disclaimer & Electrical Safety
+
+* **🚨 Multi-Inverter AC Wiring ("Parallel" Warning):**
+  * **NEVER connect AC Outputs in parallel** unless both inverters are identical models fitted with dedicated parallel phase-sync communication boards/cables. Connecting unsynchronized AC outputs together will cause an immediate out-of-phase short circuit and destroy the output IGBTs on both units. In a mixed setup (like Anenji + Easun), each inverter must feed **completely separate AC load circuits** (hence the **Main + Island** architecture in this bridge) while sharing only the **48V DC battery bus** and separate PV strings.
+  * **Sharing AC Grid Input across 48V-linked Inverters:** Depending on internal neutral-ground bonding and non-isolated topologies, connecting AC Grid Input to more than one inverter sharing the same 48V battery bank may or may not work. On the tested Anenji + Easun setup, connecting AC Grid Input to the secondary inverter triggers an immediate hardware fault due to internal current loops—so the secondary unit is run strictly with its AC Grid Input disconnected (`island` role).
 
 * **EEPROM Lifespan:** Changing inverter parameters writes to non-volatile memory inside the inverter DSP. While this bridge enforces rate-limiting and blocks duplicate writes, avoid running high-frequency Home Assistant loops that continuously alter register values every few seconds.
 
 * **Battery Limits:** Always verify your LiFePO4 BMS charging voltage and current ratings before adjusting `bulk_charge_volt`, `float_charge_volt`, or `max_total_amps`.
-* **Different Inverters in "paralel":** Never connect ac lines in paralel if inverters don't explicitlty support ac sync on the output. Grid input may or may work on more than one 48v paralel connected inverter but on my setuo, it gets a fault immediatly so i didn't risk testing further.
