@@ -330,3 +330,4 @@ As soon as the bridge connects to your MQTT broker, both inverters appear under 
 * **EEPROM Lifespan:** Changing inverter parameters writes to non-volatile memory inside the inverter DSP. While this bridge enforces rate-limiting and blocks duplicate writes, avoid running high-frequency Home Assistant loops that continuously alter register values every few seconds.
 
 * **Battery Limits:** Always verify your LiFePO4 BMS charging voltage and current ratings before adjusting `bulk_charge_volt`, `float_charge_volt`, or `max_total_amps`.
+* **Different Inverters in "paralel":** Never connect ac lines in paralel if inverters don't explicitlty support ac sync on the output. Grid input may or may work on more than one 48v paralel connected inverter but on my setuo, it gets a fault immediatly so i didn't risk testing further.
