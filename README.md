@@ -1,13 +1,10 @@
-
-<img width="1366" height="768" alt="Screenshot (49)" src="https://github.com/user-attachments/assets/21994c04-a03b-4cf6-a89d-85ff5c64cf13" />
-
 # Unified Solar MQTT Bridge & Web LCD (Anenji / Easun / Voltronic / Sumry)
 
 **Cloud-optional by design. Sub-second local telemetry, native Home Assistant MQTT Discovery, and a live Web LCD for hybrid solar inverters.**
 
 This daemon bridges hybrid solar inverters commonly sold under **Anenji**, **Easun**, **MPP Solar**, **Sumry**, and **PowMr** directly into **Home Assistant** via MQTT. It eliminates the 5-minute polling delay and external server dependency of apps like *SmartEss*, *Desmonitor*, and *WatchPower*, replacing them with **1.5-second local polling**, full bi-directional parameter control, and an interactive **Voltronic-style Web LCD**.
 
-Version 43 unifies two distinct hardware architectures into a single multi-threaded service:
+Version 2.0 unifies two distinct hardware architectures into a single multi-threaded service:
 
 1. **Sumry / SRNE Modbus RTU-over-TCP (`anenji_tcp`):** Intercepts traffic from the stock Wi-Fi dongle over the local network (e.g., **Anenji ANJ-6200W-48V**).
 
@@ -21,7 +18,7 @@ Version 43 unifies two distinct hardware architectures into a single multi-threa
 
   * Animated proportional power flow lines, dynamic AC bypass routing, HVDC bus boxes, solar ray gauges, and load/grid wedges.
 
-  * Multi-inverter **Main + Island** topology view with real-time 48V DC bus cross-transfer indicators (`▲` / `▼` Watts between inverters).
+  * Multi-inverter **Main + Island** topology view with real-time 48V DC bus cross-transfer indicators (`▲` / `▼` Watts between inverters). Automatically hides the Island inverter's AC output branch when running in pure MPPT charge-only mode (physical power switch OFF).
 
   * **1000 imp/kWh Utility-Meter Pulse LEDs:** The `AC/INV` and `CHG` status LEDs under the LCD bezel act as real-time optical energy meter pulse indicators, flashing once for every **1 Wh** ($1000\text{ pulses/kWh}$) of inverting or charging energy accumulated.
 
@@ -51,7 +48,7 @@ When the dongle connects to port `18899`, the bridge emulates the cloud server b
 
 #### Option A: Router DNAT Redirect (OpenWRT / pfSense / MikroTik)
 
-If your main router supports custom NAT rules, redirect traffic from the dongle's static IP (`192.168.0.111`) destined for port `18899` to your bridge server (`192.168.0.105`).
+If your main router supports custom DNAT rules, redirect traffic from the dongle's static IP (`192.168.0.111`) destined for port `18899` to your bridge server (`192.168.0.105`).
 
 **OpenWRT (`/etc/config/firewall`):**
 
@@ -73,6 +70,7 @@ config nat 'inverter_snat'
     option dest_ip '192.168.0.105'
     option dest_port '18899'
     option target 'MASQUERADE'
+
 ```
 
 #### Option B: Gateway Interception via Linux / Proxmox LXC (`dnsmasq` + `iptables`)
@@ -83,6 +81,7 @@ If your main ISP router does not support custom DNAT rules, configure your Linux
 
 ```
 apt update && apt install dnsmasq iptables-persistent -y
+
 ```
 
 2. **Configure `/etc/dnsmasq.conf`** (disable your router's built-in DHCP first):
@@ -102,6 +101,7 @@ dhcp-host=AA:BB:CC:DD:EE:FF,192.168.0.111,Solar-Inverter,set:solar_inverter
 
 # Push the Bridge Server (.105) as the Default Gateway ONLY for the inverter
 dhcp-option=tag:solar_inverter,3,192.168.0.105
+
 ```
 
 3. **Apply `iptables` Port Redirection & WAN Block:**
@@ -119,6 +119,7 @@ iptables -A FORWARD -s 192.168.0.111 -j DROP
 
 # Persist across reboots
 netfilter-persistent save
+
 ```
 
 *(Tip: Power-cycle the Wi-Fi dongle or restart your router's Wi-Fi AP after applying DHCP/NAT rules so the dongle immediately establishes a new TCP session to the local bridge).*
@@ -132,21 +133,32 @@ For Voltronic/Axpert-based inverters (such as the **Easun ISolar SML II 5.5kW**)
 ```
 # Check your USB adapter's idVendor and idProduct (commonly 1a86:7523 for CH340 or 067b:2303 for PL2303)
 lsusb
+
 ```
 
 Create `/etc/udev/rules.d/99-solar-serial.rules`:
 
 ```
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="easun-rs485", MODE="0666"
+
 ```
 
 Reload `udev`:
 
 ```
 udevadm control --reload-rules && udevadm trigger
+
 ```
 
 *(If running inside a Proxmox LXC container, pass the `/dev/easun-rs485` or `/dev/ttyUSB*` device node through to the container).*
+
+### 3. Operating the Island Inverter as a Zero-Idle Solar MPPT (Power Button OFF + Dry Relay Control)
+
+In a dual-inverter setup sharing a 48V battery bank, the secondary (`island`) inverter does not need to keep its DC-AC inverter stage running 24/7:
+
+* **Pure MPPT Mode (Power Switch OFF):** With the physical rocker switch on the Easun turned **OFF**, it acts as a standalone solar MPPT charger with **zero night-time battery self-consumption**. When PV voltage rises at sunrise, the unit automatically wakes up, charges the shared 48V battery bank (while reporting full telemetry over USB to the bridge), and goes completely back to sleep at sunset. In this state, the Web LCD automatically hides the Island AC output branch and shows only the PV $\rightarrow$ HVDC $\rightarrow$ 48V DC charging path.
+* **Avoiding Split-State Battery Drain During Grid Bypass:** If the Island inverter's AC output is left ON while the Main inverter switches to Grid Bypass (due to low battery SOC), the Island inverter—having no grid input—would continue draining the depleted 48V battery bank to power its AC loads.
+* **Dry-Contact Relay Automation:** To simplify operation and coordinate both units seamlessly, wire a smart dry-contact relay across the Easun's physical power toggle switch. Home Assistant can then automatically turn the Easun's AC output OFF whenever the Main inverter enters Grid Bypass (or when extra AC capacity isn't needed), dropping the Easun into zero-idle MPPT-only mode.
 
 ## 🛠️ Software Installation
 
@@ -154,6 +166,7 @@ udevadm control --reload-rules && udevadm trigger
 
 ```
 apt update && apt install python3 python3-paho-mqtt python3-serial -y
+
 ```
 
 *(Note: Requires `paho-mqtt >= 2.0.0` using `CallbackAPIVersion.VERSION2`. If your distro ships an older apt package, install via `pip3 install paho-mqtt pyserial --break-system-packages`).*
@@ -178,6 +191,7 @@ User=root
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 
 Enable and start the service:
@@ -185,6 +199,7 @@ Enable and start the service:
 ```
 systemctl daemon-reload
 systemctl enable --now inverter-bridge
+
 ```
 
 ## ⚙️ Configuration & Web UI (`:8080`)
@@ -246,6 +261,7 @@ You can edit `/root/bridge_config.json` directly from the Web UI form at the bot
     }
   ]
 }
+
 ```
 
 ## 🏠 Home Assistant Integration (MQTT Auto-Discovery)
@@ -321,7 +337,9 @@ As soon as the bridge connects to your MQTT broker, both inverters appear under 
 ## ⚠️ Disclaimer & Electrical Safety
 
 * **🚨 Multi-Inverter AC Wiring ("Parallel" Warning):**
+
   * **NEVER connect AC Outputs in parallel** unless both inverters are identical models fitted with dedicated parallel phase-sync communication boards/cables. Connecting unsynchronized AC outputs together will cause an immediate out-of-phase short circuit and destroy the output IGBTs on both units. In a mixed setup (like Anenji + Easun), each inverter must feed **completely separate AC load circuits** (hence the **Main + Island** architecture in this bridge) while sharing only the **48V DC battery bus** and separate PV strings.
+
   * **Sharing AC Grid Input across 48V-linked Inverters:** Depending on internal neutral-ground bonding and non-isolated topologies, connecting AC Grid Input to more than one inverter sharing the same 48V battery bank may or may not work. On the tested Anenji + Easun setup, connecting AC Grid Input to the secondary inverter triggers an immediate hardware fault due to internal current loops—so the secondary unit is run strictly with its AC Grid Input disconnected (`island` role).
 
 * **EEPROM Lifespan:** Changing inverter parameters writes to non-volatile memory inside the inverter DSP. While this bridge enforces rate-limiting and blocks duplicate writes, avoid running high-frequency Home Assistant loops that continuously alter register values every few seconds.
